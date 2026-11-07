@@ -96,17 +96,33 @@ O sistema opera dentro do ambiente Linux/CUDA da GPU NVIDIA T4 no Google Colab, 
 #### Estrutura de Pastas do Repositório
 
 ```
-adaptive-cascade-routing-ptbr/
+adaptive-cascade-routing/
+├── .github/workflows/ci.yml       # CI: ruff + mypy + pytest no Python 3.12
+├── .gitignore                     # Caches Python e .venv; NÃO ignora uv.lock nem results/
+├── .python-version                # "3.12" (lido pelo uv)
+├── LICENSE                        # MIT
+├── CONTEXT.md                     # Glossário do projeto (PT-BR)
 ├── README.md                      # Documentação técnica do repositório e guia de execução
-├── requirements.txt               # Dependências Python (vLLM, PyTorch, datasets, pandas, matplotlib)
+├── pyproject.toml                 # Dependências (uv), extra "serving" (vLLM), config ruff/mypy/pytest
+├── requirements.txt               # Deps core exportadas do uv.lock (para pip)
+├── requirements-colab.txt         # Core + vLLM exportadas do uv.lock (para o Colab)
+├── uv.lock                        # Lockfile commitado (reprodutibilidade do benchmark)
 ├── config/
 │   └── benchmark_config.yaml      # Parâmetros de modelo, limiares de confiança e portas do vLLM
+├── docs/
+│   ├── adaptive-cascade-design-doc.md   # Este documento
+│   ├── dataset-loader-spec.md           # Stories do Componente A
+│   ├── engine-router-spec.md            # Stories dos Componentes B–D
+│   ├── system2-evaluator-spec.md        # Stories dos Componentes E–G
+│   └── adr/                             # Registros de decisão de arquitetura
 ├── src/
+│   ├── __init__.py
 │   ├── data/
 │   │   ├── __init__.py
 │   │   └── loader.py              # Ingestão e formatação do dataset ASSIN 2
 │   ├── engine/
 │   │   ├── __init__.py
+│   │   ├── server.py              # Ciclo de vida do servidor vLLM (vLLMServerManager, §5.2)
 │   │   ├── system1.py             # Interface com /v1/systemone e extração de logprobs
 │   │   ├── system2.py             # Interface com /v1/chat/completions (CoT + JSON)
 │   │   └── router.py              # Lógica do Roteador de Cascata e cálculo de entropia
@@ -114,10 +130,13 @@ adaptive-cascade-routing-ptbr/
 │       ├── __init__.py
 │       └── evaluator.py           # Coleta de latência (p50/p95/p99), tokens e acurácia
 ├── notebook/
-│   └── adaptive_cascade_benchmark.ipynb # Google Colab Notebook executável ponta a ponta
-└── results/
-    ├── raw_benchmark_data.json    # Logs detalhados de cada requisição do benchmark
-    └── latency_cost_tradeoff.png  # Gráficos de dispersão e Curva de APGR vs Custo
+│   └── adaptive_cascade_benchmark.ipynb # Google Colab Notebook executável ponta a ponta (Marco 1)
+├── results/
+│   ├── raw_benchmark_data.json    # Logs detalhados de cada requisição do benchmark
+│   └── latency_cost_tradeoff.png  # Gráficos de dispersão e Curva de APGR vs Custo
+└── tests/
+    ├── test_config.py             # Contrato congelado do benchmark_config.yaml
+    └── test_structure.py          # Importação de todos os módulos esqueleto
 ```
 
 ---
@@ -155,6 +174,7 @@ adaptive-cascade-routing-ptbr/
   ```python
   from dataclasses import dataclass
   from typing import Dict
+
 
   @dataclass
   class System1Output:

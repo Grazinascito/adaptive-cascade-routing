@@ -1,5 +1,7 @@
 # Adaptive Cascade Routing for Typed LLM Inference: System 1 (Logprobs) vs System 2 (CoT)
 
+[![CI](https://github.com/Grazinascito/adaptive-cascade-routing/actions/workflows/ci.yml/badge.svg)](https://github.com/Grazinascito/adaptive-cascade-routing/actions/workflows/ci.yml)
+
 Empirical inference engineering benchmark evaluating latency, token cost, and accuracy trade-offs across three execution scenarios for Brazilian Portuguese (PT-BR) Natural Language Inference (NLI): **System 1 Pure**, **System 2 Pure**, and **Adaptive Cascade Routing**.
 
 ## Executive Overview
@@ -63,24 +65,46 @@ $$
 
 ```
 adaptive-cascade-routing/
-├── README.md                      # Project documentation and benchmark overview
-├── requirements.txt               # Python dependencies (vLLM, PyTorch, datasets, pandas)
+├── .github/workflows/ci.yml         # CI: ruff + mypy + pytest on Python 3.12
+├── .gitignore                       # Python caches, .venv; keeps uv.lock and results/
+├── .python-version                  # "3.12" (read by uv)
+├── LICENSE                          # MIT
+├── CONTEXT.md                       # Project glossary (PT-BR)
+├── README.md                        # Project documentation and benchmark overview
+├── pyproject.toml                   # Dependencies (uv), "serving" extra (vLLM), ruff/mypy/pytest config
+├── requirements.txt                 # Core deps exported from uv.lock (for pip)
+├── requirements-colab.txt           # Core + vLLM exported from uv.lock (for Colab)
+├── uv.lock                          # Committed lockfile (benchmark reproducibility)
 ├── config/
-│   └── benchmark_config.yaml      # Model parameters, router thresholds, and vLLM ports
+│   └── benchmark_config.yaml        # Frozen benchmark contract (model, α, seed, endpoints, KPIs)
+├── docs/
+│   ├── adaptive-cascade-design-doc.md   # Full design doc (PT-BR)
+│   ├── dataset-loader-spec.md           # Component A stories & testing
+│   ├── engine-router-spec.md            # Components B–D stories & testing
+│   ├── system2-evaluator-spec.md        # Components E–G stories & testing
+│   └── adr/                             # Architecture decision records
 ├── src/
+│   ├── __init__.py
 │   ├── data/
-│   │   ├── loader.py              # ASSIN 2 dataset loader and prompt formatter
+│   │   ├── __init__.py
+│   │   └── loader.py                # ASSIN 2 dataset loader and prompt formatter
 │   ├── engine/
-│   │   ├── system1.py             # Interface with /v1/systemone (logprobs extraction)
-│   │   ├── system2.py             # Interface with /v1/chat/completions (CoT + JSON)
-│   │   └── router.py              # Softmax, Shannon entropy, and RouteLLM cascade logic
+│   │   ├── __init__.py
+│   │   ├── server.py                # vLLM server lifecycle (vLLMServerManager)
+│   │   ├── system1.py               # Interface with /v1/systemone (logprobs extraction)
+│   │   ├── system2.py               # Interface with /v1/chat/completions (CoT + JSON)
+│   │   └── router.py                # Softmax, Shannon entropy, and RouteLLM cascade logic
 │   └── metrics/
-│       └── evaluator.py           # Benchmark harness (p50/p95/p99 latency, tokens, APGR)
+│       ├── __init__.py
+│       └── evaluator.py             # Benchmark harness (p50/p95/p99 latency, tokens, APGR)
 ├── notebook/
-│   └── adaptive_cascade_benchmark.ipynb # Google Colab end-to-end executable notebook
-└── results/
-    ├── raw_benchmark_data.json    # Request-level execution logs
-    └── latency_cost_tradeoff.png  # APGR vs token savings trade-off visualization
+│   └── adaptive_cascade_benchmark.ipynb # Google Colab end-to-end executable notebook (Marco 1)
+├── results/
+│   ├── raw_benchmark_data.json      # Request-level execution logs
+│   └── latency_cost_tradeoff.png    # APGR vs token savings trade-off visualization
+└── tests/
+    ├── test_config.py               # Frozen benchmark contract (config keys and values)
+    └── test_structure.py            # All skeleton modules import without error
 ```
 
 ## Quickstart & Setup
@@ -88,14 +112,26 @@ adaptive-cascade-routing/
 ### Prerequisites
 
 - Python 3.12+
-- Google Colab with GPU NVIDIA T4 (16GB VRAM) or local CUDA 12.x environment
+- Local development: any OS (client code only; vLLM is never installed locally)
+- Serving & benchmark execution: Google Colab with GPU NVIDIA T4 (16GB VRAM) or a local CUDA 12.x environment
 
-### Installation
+### Local development (uv)
 
 ```bash
 git clone https://github.com/Grazinascito/adaptive-cascade-routing.git
 cd adaptive-cascade-routing
-pip install -r requirements.txt
+uv sync --dev
+uv run pytest
+```
+
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml` + committed
+`uv.lock`); vLLM lives in the `serving` extra and is only installed on CUDA machines
+(`uv sync --extra serving`). See [docs/adr/0001-deps-uv-vllm-separado-colab.md](docs/adr/0001-deps-uv-vllm-separado-colab.md).
+
+### Colab / CUDA environment (pip, includes vLLM)
+
+```bash
+pip install -r requirements-colab.txt
 ```
 
 ### Running the vLLM Server & Benchmark

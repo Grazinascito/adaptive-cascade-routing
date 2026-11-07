@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Ambientes virtuais
+.venv/
+venv/
+
+# Cache de ferramentas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Sistema / segredos
+.DS_Store
+.env
+
+# Dados locais de sessão do ZCode (ferramenta de agente)
+.zcode/
+
+# Nota: uv.lock e results/ são COMMITADOS (lock = reprodutibilidade;
+# results = entregáveis do benchmark).

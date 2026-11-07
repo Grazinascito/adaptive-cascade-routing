@@ -93,7 +93,7 @@ adaptive-cascade-routing/
 ### Installation
 
 ```bash
-git clone https://github.com/<your-username>/adaptive-cascade-routing.git
+git clone https://github.com/Grazinascito/adaptive-cascade-routing.git
 cd adaptive-cascade-routing
 pip install -r requirements.txt
 ```

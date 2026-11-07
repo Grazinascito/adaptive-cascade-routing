@@ -1,0 +1,37 @@
+# Contrato congelado do benchmark.
+# Todo valor abaixo já está decidido nos docs; tests/test_config.py guarda
+# os valores críticos (seed, amostras, alpha, max_tokens) contra alteração acidental.
+
+dataset:
+  name: nilc-nlp/assin2          # README.md:13
+  split: test
+  frozen_samples: 200            # conjunto congelado (README.md:13,21)
+  seed: 42                       # determinismo da amostragem
+
+model:
+  id: Qwen/Qwen2.5-7B-Instruct-AWQ   # README.md:107
+  quantization: awq
+
+serving:
+  base_url: "http://127.0.0.1:8000/v1"
+  port: 8000
+  prefix_caching: true           # --enable-prefix-caching (README.md:109)
+
+system1:
+  endpoint: /v1/systemone        # fast-path: 1 token + logprobs (README.md:15)
+  max_tokens: 1
+
+system2:
+  endpoint: /v1/chat/completions # slow-path: CoT + JSON (README.md:16)
+  max_tokens: 256
+
+router:
+  alpha: 0.85                    # limiar de confiança (README.md:17)
+
+metrics:
+  percentiles: [50, 95, 99]
+
+kpis:                            # critérios de sucesso (README.md:121-123)
+  p95_reduction: 0.50            # p95 da cascata >= 50% menor que System 2 Pure
+  token_savings: 0.60            # tokens decodificados >= 60% menores
+  apgr_target: 0.95              # recuperar >= 95% da diferença de acurácia

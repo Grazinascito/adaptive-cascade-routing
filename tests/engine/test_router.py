@@ -19,7 +19,7 @@ from src.engine.router import (
     softmax,
 )
 
-_CHOICES = ["Entailment", "Contradiction"]
+_CHOICES: list[Label] = ["Entailment", "Contradiction"]
 
 _QUERY: RoutingQuery = {
     "premise": "O gato dorme no sofá.",

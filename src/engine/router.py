@@ -13,7 +13,7 @@ from src.data.loader import Label
 LOGPROB_FLOOR: Final = -100.0
 
 
-def softmax(logprobs: Mapping[str, float], choices: Sequence[str]) -> dict[str, float]:
+def softmax(logprobs: Mapping[str, float], choices: Sequence[Label]) -> dict[Label, float]:
     """Converte os logprobs dos rótulos de `choices` em probabilidades normalizadas.
 
     Rótulos de `choices` ausentes em `logprobs` recebem `LOGPROB_FLOOR`; chaves de
@@ -27,22 +27,22 @@ def softmax(logprobs: Mapping[str, float], choices: Sequence[str]) -> dict[str, 
     return {choice: value / total for choice, value in exps.items()}
 
 
-def shannon_entropy(probabilities: Mapping[str, float]) -> float:
+def shannon_entropy(probabilities: Mapping[Label, float]) -> float:
     """Calcula a entropia de Shannon em bits; termos com p = 0 valem 0 por convenção."""
     return -sum(p * math.log2(p) for p in probabilities.values() if p > 0.0)
 
 
 class DecisionMetrics(TypedDict):
-    top_choice: str
+    top_choice: Label
 
     confidence: float
 
     entropy: float
 
-    probabilities: dict[str, float]
+    probabilities: dict[Label, float]
 
 
-def compute_metrics(logprobs: Mapping[str, float], choices: Sequence[str]) -> DecisionMetrics:
+def compute_metrics(logprobs: Mapping[str, float], choices: Sequence[Label]) -> DecisionMetrics:
     """Componente D: métricas de incerteza sobre os logprobs dos rótulos candidatos.
 
     Levanta `ValueError` se `choices` tiver menos de dois rótulos ou duplicatas,

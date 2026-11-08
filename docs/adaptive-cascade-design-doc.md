@@ -147,8 +147,10 @@ adaptive-cascade-routing/
 
 - **Scope & Responsibility**: Carregar as amostras de teste do dataset ASSIN 2, extrair os campos `premise`, `hypothesis` e `entailment_judgment`, e formatar o estado base (*prompt*) otimizado para reutilização de prefixo no KV cache do vLLM.
 - **Interfaces & Contracts**:
-  - `load_assin2_test_set(split: str = "test", sample_limit: int = 200) -> List[Dict]`
-  - `format_system1_prompt(premise: str, hypothesis: str) -> Dict[str, Any]`
+  - `load_assin2_raw_split(split: str = "test") -> list[ASSIN2Sample]`
+  - `normalize_label(raw: str) -> str`
+  - `format_system1_prompt(premise: str, hypothesis: str) -> FormattedPromptPayload`
+  - `get_frozen_eval_set(split: str = "test", sample_limit: int = 200, seed: int = 42) -> list[ASSIN2Sample]`
 - **Dependencies**: Biblioteca `datasets` do Hugging Face.
 - **Core Logic**:
   1. Converte o rótulo original do ASSIN 2 (`NONE` -> `Contradiction`, `ENTAILMENT` -> `Entailment`).

@@ -46,6 +46,12 @@ python_version = "3.12"
 check_untyped_defs = true
 files = ["src", "tests"]
 
+# `datasets` não distribui py.typed nem stubs; o mypy não analisa a lib,
+# mas continua checando todo o código do repo que a usa.
+[[tool.mypy.overrides]]
+module = "datasets"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

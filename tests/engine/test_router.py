@@ -38,9 +38,7 @@ def _spy_system2(calls: list[RoutingQuery]) -> System2Handler:
 
 
 def test_softmax_renormalizes_logprobs_into_probabilities_that_sum_to_one() -> None:
-    probabilities = softmax(
-        {"Entailment": math.log(0.6), "Contradiction": math.log(0.4)}, _CHOICES
-    )
+    probabilities = softmax({"Entailment": math.log(0.6), "Contradiction": math.log(0.4)}, _CHOICES)
 
     assert probabilities == pytest.approx({"Entailment": 0.6, "Contradiction": 0.4})
     assert sum(probabilities.values()) == pytest.approx(1.0)

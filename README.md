@@ -1,6 +1,9 @@
 # Adaptive Cascade Routing for Typed LLM Inference: System 1 (Logprobs) vs System 2 (CoT)
 
 [![CI](https://github.com/Grazinascito/adaptive-cascade-routing/actions/workflows/ci.yml/badge.svg)](https://github.com/Grazinascito/adaptive-cascade-routing/actions/workflows/ci.yml)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Grazinascito/adaptive-cascade-routing/blob/main/notebook/adaptive_cascade_benchmark.ipynb)
+[![Dataset](https://img.shields.io/badge/Dataset-assin2-FFD21F?logo=huggingface&logoColor=black)](https://huggingface.co/datasets/nilc-nlp/assin2)
+[![Model](https://img.shields.io/badge/Model-Qwen3--4B--AWQ-FFD21F?logo=huggingface&logoColor=black)](https://huggingface.co/Qwen/Qwen3-4B-AWQ)
 
 Empirical inference engineering benchmark evaluating latency, token cost, and accuracy trade-offs across three execution scenarios for Brazilian Portuguese (PT-BR) Natural Language Inference (NLI): **System 1 Pure**, **System 2 Pure**, and **Adaptive Cascade Routing**.
 

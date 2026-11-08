@@ -142,7 +142,7 @@ On Google Colab (GPU NVIDIA T4), open [notebook/adaptive_cascade_benchmark.ipynb
 
 ```bash
 python -m vllm.entrypoints.openai.api_server \
-    --model Qwen/Qwen2.5-7B-Instruct-AWQ \
+    --model Qwen/Qwen3-4B-Instruct-2507-AWQ \
     --quantization awq \
     --enable-prefix-caching \
     --gpu-memory-utilization 0.90 \

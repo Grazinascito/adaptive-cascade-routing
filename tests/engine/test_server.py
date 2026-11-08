@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 import pytest
 
-from src.engine import server
+from src.engine import server, system1
 
 
 class _FakePopen:
@@ -77,7 +77,7 @@ def test_start_server_returns_true_without_spawning_when_health_check_already_pa
     _spawn_recording(monkeypatch, spawned)
     monkeypatch.setattr(server, "health_check", lambda base_url: True)
 
-    assert server.start_server("Qwen/Qwen2.5-7B-Instruct-AWQ") is True
+    assert server.start_server(system1.DEFAULT_MODEL) is True
     assert spawned == []
 
 
@@ -94,7 +94,7 @@ def test_start_server_launches_api_server_with_expected_flags_and_polls_until_he
 
     monkeypatch.setattr(server, "health_check", healthy_on_second_poll)
 
-    assert server.start_server("Qwen/Qwen2.5-7B-Instruct-AWQ") is True
+    assert server.start_server(system1.DEFAULT_MODEL) is True
 
     assert health_calls["count"] == 2
     assert spawned[0].command == [
@@ -102,7 +102,7 @@ def test_start_server_launches_api_server_with_expected_flags_and_polls_until_he
         "-m",
         "vllm.entrypoints.openai.api_server",
         "--model",
-        "Qwen/Qwen2.5-7B-Instruct-AWQ",
+        system1.DEFAULT_MODEL,
         "--host",
         "127.0.0.1",
         "--port",
@@ -126,7 +126,7 @@ def test_start_server_raises_vllmserverexception_with_restart_instructions_when_
     monkeypatch.setattr(server, "health_check", lambda base_url: False)
 
     with pytest.raises(server.vLLMServerException, match="vllm.entrypoints.openai.api_server"):
-        server.start_server("Qwen/Qwen2.5-7B-Instruct-AWQ", startup_timeout_s=0.0)
+        server.start_server(system1.DEFAULT_MODEL, startup_timeout_s=0.0)
 
 
 def test_start_server_raises_vllmserverexception_when_process_exits_during_startup(
@@ -139,7 +139,7 @@ def test_start_server_raises_vllmserverexception_when_process_exits_during_start
     monkeypatch.setattr(server, "health_check", lambda base_url: False)
 
     with pytest.raises(server.vLLMServerException, match="vllm_server.log"):
-        server.start_server("Qwen/Qwen2.5-7B-Instruct-AWQ")
+        server.start_server(system1.DEFAULT_MODEL)
 
 
 def test_health_check_returns_true_on_200_and_false_on_connection_error(
@@ -171,7 +171,7 @@ def test_stop_server_terminates_only_a_process_we_started(
 
     monkeypatch.setattr(server, "health_check", healthy_on_second_poll)
 
-    assert server.start_server("Qwen/Qwen2.5-7B-Instruct-AWQ") is True
+    assert server.start_server(system1.DEFAULT_MODEL) is True
 
     server.stop_server()
     server.stop_server()

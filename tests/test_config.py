@@ -35,4 +35,4 @@ def test_preserves_the_frozen_benchmark_contract_seed_42_samples_200_alpha_085_m
     assert config["router"]["alpha"] == 0.85
     assert config["system1"]["max_tokens"] == 1
     assert config["system2"]["max_tokens"] == 256
-    assert config["model"]["id"] == "Qwen/Qwen2.5-7B-Instruct-AWQ"
+    assert config["model"]["id"] == "Qwen/Qwen3-4B-Instruct-2507-AWQ"

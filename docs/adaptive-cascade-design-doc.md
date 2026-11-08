@@ -165,7 +165,7 @@ adaptive-cascade-routing/
   - `stop_server() -> None`; exceção `vLLMServerException` para crash/OOM/timeout de startup (com instruções de restart e leitura de VRAM)
 - **Dependencies**: Executável `vllm.entrypoints.openai.api_server`, CUDA 12.x, PyTorch.
 - **Core Logic**:
-  1. Dispara a linha de comando do servidor com argumentos de otimização (`--model Qwen/Qwen2.5-7B-Instruct-AWQ --quantization awq --enable-prefix-caching --gpu-memory-utilization 0.90 --logprobs-mode raw_logprobs`); reusa um servidor já saudável sem lançar novo processo.
+  1. Dispara a linha de comando do servidor com argumentos de otimização (`--model Qwen/Qwen3-4B-Instruct-2507-AWQ --quantization awq --enable-prefix-caching --gpu-memory-utilization 0.90 --logprobs-mode raw_logprobs`); reusa um servidor já saudável sem lançar novo processo.
   2. Executa polling do endpoint de health do vLLM até receber resposta HTTP 200 dentro do timeout de startup.
 
 ### 5.3 Component C: System 1 Typed Decision Engine (`system1.py`)
@@ -253,7 +253,7 @@ adaptive-cascade-routing/
 ## 7. Performance & Scalability
 
 - **Prefix Caching Optimization**: Ao prefixar as requisições com a instrução do sistema e os rótulos válidos, a flag `--enable-prefix-caching` do vLLM permite reutilizar os tensores de KV Cache no espaço da GPU, reduzindo o tempo de *prefill* para requisições subsequentes a aproximadamente 5-10ms.
-- **Gerenciamento de Memória VRAM**: Utilização de quantização AWQ em 4-bits, limitando a ocupação de VRAM do modelo de 7B a aproximadamente 5.5 GB em uma GPU T4 de 16 GB, reservando o espaço restante para alocação dinâmica do KV Cache.
+- **Gerenciamento de Memória VRAM**: Utilização de quantização AWQ em 4-bits, limitando a ocupação de VRAM do modelo de 4B a aproximadamente 3.5 GB em uma GPU T4 de 16 GB (a troca do 7B original pelo Qwen3-4B veio do requisito de read strategy do `/v1/systemone`; ver Assumptions do engine-router-spec), reservando o espaço restante para alocação dinâmica do KV Cache.
 
 ---
 
@@ -285,7 +285,7 @@ adaptive-cascade-routing/
 
 ### Riscos e Mitigações
 - **Risco 1: Limite de VRAM no Colab (16GB)**.  
-  *Mitigação*: Utilizar modelos quantizados AWQ de 7B ou 9B com `--gpu-memory-utilization 0.90`.
+  *Mitigação*: Utilizar modelos quantizados AWQ da família Qwen3 (4B–8B) com `--gpu-memory-utilization 0.90`.
 - **Risco 2: Oscilação de latência em ambiente compartilhado no Colab**.  
   *Mitigação*: Ignorar as primeiras 5 requisições de *warmup* e reportar percentis estatísticos ($p50, p95, p99$) agregados em 200 iterações.
 

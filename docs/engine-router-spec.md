@@ -28,7 +28,7 @@ Configure, launch, and monitor the local `vLLM` inference server on an air-gappe
 **Independent Test**: Health-check suite executing a request to local port 8000 returning `200 OK`, followed by 5 warmup requests verifying prefix cache hits in vLLM metrics logs (`avg_prompt_throughput` and KV cache reuse > 0%).
 
 **Acceptance Scenarios**:
-1. **Given** a GPU T4 environment with PyTorch and vLLM installed, **When** `vLLMServerManager.start_server(model_name="Qwen/Qwen2.5-7B-Instruct-AWQ", quantization="awq", enable_prefix_caching=True)` is called, **Then** the server process binds to port 8000 within 90 seconds and allocates <= 90% GPU VRAM for model weights and KV cache.
+1. **Given** a GPU T4 environment with PyTorch and vLLM installed, **When** `vLLMServerManager.start_server(model_name="Qwen/Qwen3-4B-Instruct-2507-AWQ", quantization="awq", enable_prefix_caching=True)` is called, **Then** the server process binds to port 8000 within 90 seconds and allocates <= 90% GPU VRAM for model weights and KV cache.
 2. **Given** a running vLLM server, **When** 10 sequential queries sharing an identical system prompt prefix are submitted, **Then** prefill latency for queries 2–10 drops by >= 70% compared to query 1 due to prefix cache hits.
 
 ---
@@ -127,5 +127,5 @@ Implement `route(query, confidence, alpha, system2)` in `router.py`, following B
 ## Assumptions
 
 - Assumes vLLM version >= 0.32.0 with the `/v1/systemone` Structured Decisions API installed in the execution environment and served with `--logprobs-mode raw_logprobs`.
-- Assumes the underlying GPU model (`Qwen/Qwen2.5-7B-Instruct-AWQ` or similar 7B AWQ model) fits within 16GB VRAM alongside the KV cache allocated by vLLM.
+- Assumes the underlying GPU model (`Qwen/Qwen3-4B-Instruct-2507-AWQ` or similar Qwen3/Gemma4 AWQ model) fits within 16GB VRAM alongside the KV cache allocated by vLLM. The original `Qwen/Qwen2.5-7B-Instruct-AWQ` returned `501 Not Implemented` on `/v1/systemone`: the Structured Decisions API requires an architecture with a registered read strategy (`Qwen3ForCausalLM` has one; Qwen2.5 does not), and no flag enables it.
 - Assumes the frozen 200-sample test set from ASSIN 2 contains balanced representations of `Entailment` and `Contradiction` labels.

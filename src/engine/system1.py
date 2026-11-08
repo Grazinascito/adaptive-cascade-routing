@@ -18,7 +18,7 @@ import httpx
 from src.data.loader import SYSTEM1_SYSTEM_PREFIX, Label
 from src.engine.router import compute_metrics
 
-DEFAULT_MODEL: Final = "Qwen/Qwen3-4B-Instruct-2507-AWQ"
+DEFAULT_MODEL: Final = "Qwen/Qwen3-4B-AWQ"
 QUESTION_ID: Final = "nli_label"
 QUESTION_INSTRUCTIONS: Final = (
     "Does the premise entail the hypothesis? Choose exactly one of the allowed options."

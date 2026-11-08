@@ -75,6 +75,7 @@ def test_execute_reasoning_sends_cot_json_prompt_with_zero_temperature_and_max_t
     assert body["model"] == system1.DEFAULT_MODEL
     assert body["temperature"] == 0.0
     assert body["max_tokens"] == 256
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
     message = body["messages"][0]["content"]
     assert _PREMISE in message
     assert _HYPOTHESIS in message

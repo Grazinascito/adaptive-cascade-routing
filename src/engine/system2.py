@@ -123,6 +123,9 @@ def execute_reasoning(
         "messages": [{"role": "user", "content": _render_prompt(premise, hypothesis)}],
         "max_tokens": max_tokens,
         "temperature": temperature,
+        # Qwen3 "original" pensa por padrão no template de chat; sem isso o
+        # conteúdo vem precedido de blocos <think> e quebra o parse do JSON.
+        "chat_template_kwargs": {"enable_thinking": False},
     }
 
     owns_client = client is None

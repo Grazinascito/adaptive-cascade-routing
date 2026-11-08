@@ -165,7 +165,7 @@ adaptive-cascade-routing/
   - `stop_server() -> None`; exceção `vLLMServerException` para crash/OOM/timeout de startup (com instruções de restart e leitura de VRAM)
 - **Dependencies**: Executável `vllm.entrypoints.openai.api_server`, CUDA 12.x, PyTorch.
 - **Core Logic**:
-  1. Dispara a linha de comando do servidor com argumentos de otimização (`--model Qwen/Qwen3-4B-Instruct-2507-AWQ --quantization awq --enable-prefix-caching --gpu-memory-utilization 0.90 --logprobs-mode raw_logprobs`); reusa um servidor já saudável sem lançar novo processo.
+  1. Dispara a linha de comando do servidor com argumentos de otimização (`--model Qwen/Qwen3-4B-AWQ --quantization awq --enable-prefix-caching --gpu-memory-utilization 0.90 --logprobs-mode raw_logprobs`); reusa um servidor já saudável sem lançar novo processo.
   2. Executa polling do endpoint de health do vLLM até receber resposta HTTP 200 dentro do timeout de startup.
 
 ### 5.3 Component C: System 1 Typed Decision Engine (`system1.py`)
@@ -215,6 +215,7 @@ adaptive-cascade-routing/
 - **Interfaces & Contracts**:
   - `execute_reasoning(premise: str, hypothesis: str, *, model: str = DEFAULT_MODEL, base_url: str = "http://127.0.0.1:8000/v1", max_tokens: int = 256, temperature: float = 0.0, timeout_s: float = 120.0, client: httpx.Client | None = None) -> System2Output`
   - `System2Output` (TypedDict): `reasoning`, `label`, `prompt_tokens`, `completion_tokens`, `latency_ms`, `fallback_used`
+  - O payload inclui `chat_template_kwargs: {"enable_thinking": false}` — modelos Qwen3 "originais" pensam por padrão e os blocos `<think>` quebrariam o parse do JSON
 - **Prompt Architecture**:
   ```text
   Analise o par de frases abaixo e forneça o raciocínio passo a passo (Chain-of-Thought) antes de determinar o rótulo final.
@@ -253,7 +254,7 @@ adaptive-cascade-routing/
 ## 7. Performance & Scalability
 
 - **Prefix Caching Optimization**: Ao prefixar as requisições com a instrução do sistema e os rótulos válidos, a flag `--enable-prefix-caching` do vLLM permite reutilizar os tensores de KV Cache no espaço da GPU, reduzindo o tempo de *prefill* para requisições subsequentes a aproximadamente 5-10ms.
-- **Gerenciamento de Memória VRAM**: Utilização de quantização AWQ em 4-bits, limitando a ocupação de VRAM do modelo de 4B a aproximadamente 3.5 GB em uma GPU T4 de 16 GB (a troca do 7B original pelo Qwen3-4B veio do requisito de read strategy do `/v1/systemone`; ver Assumptions do engine-router-spec), reservando o espaço restante para alocação dinâmica do KV Cache.
+- **Gerenciamento de Memória VRAM**: Utilização de quantização AWQ em 4-bits, limitando a ocupação de VRAM do modelo de 4B a aproximadamente 2.7 GB em uma GPU T4 de 16 GB (a troca do 7B original pelo Qwen3-4B-AWQ veio do requisito de read strategy do `/v1/systemone`; ver Assumptions do engine-router-spec), reservando o espaço restante para alocação dinâmica do KV Cache.
 
 ---
 

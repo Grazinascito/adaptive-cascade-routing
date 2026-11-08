@@ -1,16 +1,23 @@
-**Feature Branch**: `002-vllm-engine-cascade-router`
+# Feature Branch: `spec/component-b-c-d-e-engine-router`
 
 **Created**: 2026-11-07
-
 **Status**: Draft
+**Input**: Detailed Design Sections 5.2 (Component B: vLLM Server Manager), 5.3 (Component C: System 1 Engine), 5.4 (Component D: Confidence & Entropy Evaluator), and 5.5 (Component E: Adaptive Cascade Router) from Design Doc `docs/adaptive-cascade-design-doc.md`.
 
-**Input**: Description: "Specification for Component B (vLLM Serving & System 1 Typed Decision Engine - system1.py) and Component C (Confidence/Entropy Evaluator & Adaptive Cascade Router - router.py)"
+---
+
+## Component Overview
+
+- **Component B (§5.2): vLLM Serving Infrastructure (`vLLMServerManager`)**: Launches and monitors the local vLLM background engine with `--enable-prefix-caching`.
+- **Component C (§5.3): System 1 Typed Decision Engine (`system1.py`)**: Executes single-token typed decisions against `/v1/systemone` with `max_tokens=1` and `logprobs=True`.
+- **Component D (§5.4): Confidence & Entropy Evaluator (`router.py`)**: Computes Softmax probabilities, top confidence, and Shannon Entropy over candidate choices.
+- **Component E (§5.5): Adaptive Cascade Router (`CascadeRouter` in `router.py`)**: Evaluates query confidence against cost threshold $\alpha$ to route between System 1 Fast-Path and System 2 Slow-Path.
 
 ---
 
 ## Stories & Testing *(mandatory)*
 
-### Story 1 - vLLM Server Setup and Prefix Caching Initialization (Type: enabler, Priority: P1)
+### Story 1 - vLLM Server Setup and Prefix Caching Initialization (Component B §5.2, Type: enabler, Priority: P1)
 
 Configure, launch, and monitor the local `vLLM` inference server on an air-gapped GPU environment (NVIDIA T4 16GB VRAM on Linux/CUDA), enabling KV cache reuse via `--enable-prefix-caching` to minimize prefill latency across repeated system prompt contexts.
 
@@ -19,28 +26,26 @@ Configure, launch, and monitor the local `vLLM` inference server on an air-gappe
 **Independent Test**: Health-check suite executing a request to local port 8000 returning `200 OK`, followed by 5 warmup requests verifying prefix cache hits in vLLM metrics logs (`avg_prompt_throughput` and KV cache reuse > 0%).
 
 **Acceptance Scenarios**:
-
 1. **Given** a GPU T4 environment with PyTorch and vLLM installed, **When** `vLLMServerManager.start_server(model_name="Qwen/Qwen2.5-7B-Instruct-AWQ", quantization="awq", enable_prefix_caching=True)` is called, **Then** the server process binds to port 8000 within 90 seconds and allocates <= 90% GPU VRAM for model weights and KV cache.
 2. **Given** a running vLLM server, **When** 10 sequential queries sharing an identical system prompt prefix are submitted, **Then** prefill latency for queries 2–10 drops by >= 70% compared to query 1 due to prefix cache hits.
 
 ---
 
-### Story 2 - Single-Token Typed Decision Inference via `/v1/systemone` (Type: functionality, Priority: P1)
+### Story 2 - Single-Token Typed Decision Inference via `/v1/systemone` (Component C §5.3, Type: functionality, Priority: P1)
 
 Implement the `System1Engine` interface to execute single-token typed decisions against vLLM's `/v1/systemone` endpoint, requesting `max_tokens=1` and `logprobs=True` for specified choices (`["Entailment", "Contradiction"]`).
 
 **Why this priority**: Essential functionality — forms the Fast-Path mechanism that eliminates autoregressive decode iterations, achieving sub-60ms response times for high-confidence items.
 
-**Independent Test**: Deterministic execution against 50 validation samples from ASSIN 2, verifying that 100% of responses return `max_tokens=1`, contain raw logprobs for all target choices, and execute with latency p95 < 60ms.
+**Independent Test**: Deterministic execution against 50 validation samples from ASSIN 2, verifying that 100% of responses return `max_tokens=1`, contain raw logprobs for all target choices, and execute with latency $p95 < 60\text{ms}$.
 
 **Acceptance Scenarios**:
-
 1. **Given** a formatted NLI prompt (`state`), **When** `System1Engine.evaluate_typed_decision(state, choices=["Entailment", "Contradiction"])` is invoked, **Then** the engine receives an HTTP response containing log-probabilities $\ln(P)$ for both candidate tokens without generating any secondary tokens.
 2. **Given** invalid or out-of-vocabulary candidate choices, **When** `evaluate_typed_decision` is called, **Then** the engine raises a `ValueError` with clear diagnostic context before dispatching the HTTP call.
 
 ---
 
-### Story 3 - Softmax Normalization, Confidence Scoring, and Shannon Entropy Evaluation (Type: functionality, Priority: P2)
+### Story 3 - Softmax Normalization, Confidence Scoring, and Shannon Entropy Evaluation (Component D §5.4, Type: functionality, Priority: P2)
 
 Implement mathematical evaluation functions in `router.py` (`EntropyEvaluator`) to convert raw logprobs into a normalized probability distribution $P$, top confidence $\text{Confidence}(x)$, and Shannon Entropy $\text{Entropy}(P)$.
 
@@ -49,22 +54,20 @@ Implement mathematical evaluation functions in `router.py` (`EntropyEvaluator`) 
 **Independent Test**: Unit test suite verifying mathematical correctness against synthetic logprob inputs with known analytical solutions (e.g., uniform distribution yields maximum entropy $H(P) = 1.0$ bit; deterministic distribution yields $H(P) = 0.0$ bit).
 
 **Acceptance Scenarios**:
-
 1. **Given** logprob vector $l = [\ln(0.9), \ln(0.1)]$, **When** `EntropyEvaluator.compute_metrics(l)` is executed, **Then** it returns $\text{Confidence} = 0.9000 \pm 10^{-4}$ and $\text{Entropy} \approx 0.4690$ bits.
 2. **Given** equal logprobs $l = [\ln(0.5), \ln(0.5)]$, **When** `compute_metrics` is executed, **Then** it returns $\text{Confidence} = 0.5000$ and maximum Shannon Entropy $\text{Entropy} = 1.0000$ bit.
 
 ---
 
-### Story 4 - Adaptive Cascade Routing and Fallback Decision (Type: hypothesis, Priority: P2)
+### Story 4 - Adaptive Cascade Routing and Fallback Decision (Component E §5.5, Type: hypothesis, Priority: P2)
 
 Implement `CascadeRouter.route(query, confidence, threshold_alpha)` following Berkeley's RouteLLM framework $R_\alpha(q)$ to route high-confidence queries to System 1 output and low-confidence queries (uncertainty $\text{Confidence} < \alpha$) to System 2 fallback.
 
 **Why this priority**: The cornerstone of the project — tests the hypothesis that routing queries with $\text{Confidence} < \alpha$ to System 2 recovers >= 95% of System 2 standalone accuracy while keeping System 2 invocation rate below 20%.
 
-**Independent Test**: Execution over the frozen 200-sample ASSIN 2 test set across thresholds $\alpha \in \{0.50, 0.70, 0.85, 0.95\}$, verifying monotonic trade-offs between System 2 call rate, p95 latency, and overall F1-Score.
+**Independent Test**: Execution over the frozen 200-sample ASSIN 2 test set across thresholds $\alpha \in \{0.50, 0.70, 0.85, 0.95\}$, verifying monotonic trade-offs between System 2 call rate, $p95$ latency, and overall F1-Score.
 
 **Acceptance Scenarios**:
-
 1. **Given** a query with $\text{Confidence} = 0.92$ and threshold $\alpha = 0.85$, **When** `CascadeRouter.route()` is called, **Then** it returns `route = "SYSTEM_1"`, `routed_to_system_2 = False`, and completes without invoking System 2.
 2. **Given** a query with $\text{Confidence} = 0.61$ and threshold $\alpha = 0.85$, **When** `CascadeRouter.route()` is called, **Then** it returns `route = "SYSTEM_2"`, `routed_to_system_2 = True`, and dispatches the payload to `System2Engine`.
 
@@ -81,17 +84,15 @@ Implement `CascadeRouter.route(query, confidence, threshold_alpha)` following Be
 - **Malformed System 2 JSON Output**: What happens if System 2 fallback returns non-JSON or unparseable text?  
   *Handling*: Fall back to regular-expression label extraction (`r"Entailment|Contradiction"`) to recover the prediction without crashing the evaluation run.
 
----
-
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: System MUST start and manage a local `vLLM` server instance listening on port 8000 with AWQ 4-bit quantization and `--enable-prefix-caching`.
-- **FR-002**: System MUST expose `System1Engine.evaluate_typed_decision()` to send HTTP POST requests to `/v1/systemone` specifying `max_tokens=1` and `choices=["Entailment", "Contradiction"]`.
-- **FR-003**: System MUST compute Softmax-normalized probabilities $P(y_k \mid x) = \frac{\exp(l_k)}{\sum_{j=1}^K \exp(l_j)}$ from raw candidate logprobs.
-- **FR-004**: System MUST compute Shannon Entropy $\text{Entropy}(P) = -\sum_{k=1}^K P(y_k \mid x) \log_2 P(y_k \mid x)$ and Top Confidence $\text{Confidence}(x) = \max_k P(y_k \mid x)$ for every query.
-- **FR-005**: System MUST implement the RouteLLM decision function $R_\alpha(q)$:
+- **FR-001**: System MUST start and manage a local `vLLM` server instance listening on port 8000 with AWQ 4-bit quantization and `--enable-prefix-caching` (Component B §5.2).
+- **FR-002**: System MUST expose `System1Engine.evaluate_typed_decision()` to send HTTP POST requests to `/v1/systemone` specifying `max_tokens=1` and `choices=["Entailment", "Contradiction"]` (Component C §5.3).
+- **FR-003**: System MUST compute Softmax-normalized probabilities $P(y_k \mid x) = \frac{\exp(l_k)}{\sum_{j=1}^K \exp(l_j)}$ from raw candidate logprobs (Component D §5.4).
+- **FR-004**: System MUST compute Shannon Entropy $\text{Entropy}(P) = -\sum_{k=1}^K P(y_k \mid x) \log_2 P(y_k \mid x)$ and Top Confidence $\text{Confidence}(x) = \max_k P(y_k \mid x)$ for every query (Component D §5.4).
+- **FR-005**: System MUST implement the RouteLLM decision function $R_\alpha(q)$ (Component E §5.5):
   $$R_\alpha(q) = \begin{cases} \text{System 1 (Fast-Path)}, & \text{if } \text{Confidence}(q) \ge \alpha \\ \text{System 2 (Slow-Path)}, & \text{if } \text{Confidence}(q) < \alpha \end{cases}$$
 - **FR-006**: System MUST return a structured result object `CascadeResult` for every request, logging `query_id`, `system_1_latency_ms`, `confidence`, `entropy`, `routed_to_system_2`, `system_2_latency_ms`, `total_latency_ms`, `final_prediction`, and `ground_truth`.
 
@@ -112,11 +113,9 @@ Implement `CascadeRouter.route(query, confidence, threshold_alpha)` following Be
 
 ## Success Criteria *(mandatory)*
 
-### Measurable Outcomes
-
 - **SC-001 (System 1 Speed)**: System 1 Fast-Path achieves $p95 \le 60\text{ms}$ latency across the 200-sample test set.
-- **SC-002 (Cascade Latency Reduction)**: Adaptive Cascade (at calibrated $\alpha = 0.85$) reduces total $p95$ latency by $\ge 50\%$ compared to System 2 Standalone.
-- **SC-003 (Accuracy Recovery - APGR)**: Adaptive Cascade recovers $\ge 95\%$ of System 2 standalone accuracy ($APGR \ge 0.95$) on the frozen 200-sample ASSIN 2 test set.
+- **SC-002 (Cascade Latency Reduction)**: Adaptive Cascade (at calibrated $lpha = 0.85$) reduces total $p95$ latency by $\ge 50\%$ compared to System 2 Standalone.
+- **SC-003 (Accuracy Recovery - APGR)**: Adaptive Cascade recovers $\ge 95\%$ of System 2 standalone accuracy ($\text{APGR} \ge 0.95$) on the frozen 200-sample ASSIN 2 test set.
 - **SC-004 (Decode Token Reduction)**: Adaptive Cascade reduces total generated decode tokens by $\ge 60\%$ compared to System 2 Standalone.
 
 ---

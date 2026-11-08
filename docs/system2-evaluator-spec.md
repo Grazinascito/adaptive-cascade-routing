@@ -1,21 +1,21 @@
-# Feature Branch: `spec/component-d-e-system2-evaluator`
+# Feature Branch: `spec/component-f-g-system2-evaluator`
 
 **Created**: 2026-11-07
 **Status**: Draft
-**Input**: Detailed Design Sections 5.6 (`system2.py`) and 5.7 (`evaluator.py`) from Design Doc `adaptive-cascade-design-doc-v2.md`.
+**Input**: Detailed Design Sections 5.6 (Component F: System 2 Slow-Path Engine - `system2.py`) and 5.7 (Component G: Benchmark & Performance Evaluation Harness - `evaluator.py`) from Design Doc `docs/adaptive-cascade-design-doc.md`.
 
 ---
 
 ## Component Overview
 
-- **Component D: System 2 Slow-Path Engine (`system2.py`)**: Responsible for handling borderline/ambiguous NLI cases by executing Chain-of-Thought (CoT) reasoning and enforcing structured JSON outputs via `/v1/chat/completions`.
-- **Component E: Benchmark & Performance Evaluation Harness (`evaluator.py`)**: Responsible for executing tests across all 3 scenarios (System 1 Pure, System 2 Pure, Adaptive Cascade), recording per-request latency ($p50$, $p95$, $p99$), counting prefill/decode tokens, evaluating accuracy/F1-score, and computing Average Performance Gap Recovered (APGR).
+- **Component F (§5.6): System 2 Slow-Path Engine (`system2.py`)**: Responsible for handling borderline/ambiguous NLI cases by executing Chain-of-Thought (CoT) reasoning and enforcing structured JSON outputs via `/v1/chat/completions`.
+- **Component G (§5.7): Benchmark & Performance Evaluation Harness (`evaluator.py`)**: Responsible for executing tests across all 3 scenarios (System 1 Pure, System 2 Pure, Adaptive Cascade), recording per-request latency ($p50$, $p95$, $p99$), counting prefill/decode tokens, evaluating accuracy/F1-score, and computing Average Performance Gap Recovered (APGR).
 
 ---
 
 ## Stories & Testing *(mandatory)*
 
-### Story 1 - System 2 Chain-of-Thought & JSON Schema Execution (Type: functionality, Priority: P1)
+### Story 1 - System 2 Chain-of-Thought & JSON Schema Execution (Component F §5.6, Type: functionality, Priority: P1)
 
 Implement the slow-path fallback module (`System2Engine`) that accepts ambiguous/low-confidence queries from the router, prompts the LLM for step-by-step reasoning (Chain-of-Thought), and parses structured JSON output containing the final label (`Entailment` or `Contradiction`).
 
@@ -29,7 +29,7 @@ Implement the slow-path fallback module (`System2Engine`) that accepts ambiguous
 
 ---
 
-### Story 2 - Benchmark Harness & Multi-Scenario Metrics Collector (Type: enabler, Priority: P1)
+### Story 2 - Benchmark Harness & Multi-Scenario Metrics Collector (Component G §5.7, Type: enabler, Priority: P1)
 
 Implement `BenchmarkHarness` to orchestrate execution over the frozen 200-sample test set for all 3 scenarios (System 1 Pure, System 2 Pure, Adaptive Cascade) and log detailed latency, token consumption, and accuracy metrics.
 
@@ -43,7 +43,7 @@ Implement `BenchmarkHarness` to orchestrate execution over the frozen 200-sample
 
 ---
 
-### Story 3 - APGR & Trade-off Curve Generator (Type: hypothesis, Priority: P2)
+### Story 3 - APGR & Trade-off Curve Generator (Component G §5.7, Type: hypothesis, Priority: P2)
 
 Sweep the confidence threshold alpha in [0.0, 1.0] across the benchmark results to evaluate the trade-off curve between latency reduction, token savings, and APGR accuracy recovery.
 
@@ -52,45 +52,45 @@ Sweep the confidence threshold alpha in [0.0, 1.0] across the benchmark results 
 **Independent Test**: Sweep alpha across 5 values (0.50, 0.70, 0.85, 0.90, 0.95). Pass threshold: verify monotonic relationship between alpha and System 2 call rate.
 
 **Acceptance Scenarios**:
-1. **Given** benchmark execution logs across varying alpha, **When** APGR is calculated via APGR(alpha) = (Accuracy(Cascade) - Accuracy(System1)) / (Accuracy(System2) - Accuracy(System1)), **Then** the system identifies the optimal alpha where APGR >= 95% with minimum System 2 invocation rate.
+1. **Given** benchmark execution logs across varying alpha, **When** APGR is calculated via $\text{APGR}(\alpha) = \frac{\text{Accuracy}(\text{Cascade}_\alpha) - \text{Accuracy}(\text{System 1})}{\text{Accuracy}(\text{System 2}) - \text{Accuracy}(\text{System 1})}$, **Then** the system identifies the optimal alpha where $\text{APGR} \ge 0.95$ with minimum System 2 invocation rate.
 
 ---
 
 ### Edge Cases
 
 - **Model Timeout / Failure in System 2**: If System 2 times out or returns HTTP 500, return System 1's top prediction as a graceful fallback and log an error.
-- **Extreme Ambiguity (P_top = 0.50)**: Router must cleanly escalate to System 2 without infinite loops or division-by-zero errors in APGR calculation when System 1 and System 2 accuracies are equal.
+- **Extreme Ambiguity ($P_{\text{top}} = 0.50$)**: Router must cleanly escalate to System 2 without infinite loops or division-by-zero errors in APGR calculation when System 1 and System 2 accuracies are equal.
 - **Empty or Truncated Output**: System 2 parser handles empty response strings by defaulting to Contradiction with a fallback flag set.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: System2Engine MUST construct system and user prompts requiring step-by-step Chain-of-Thought reasoning prior to returning the final classification.
-- **FR-002**: System2Engine MUST enforce strict JSON formatting (reasoning and label: Entailment or Contradiction).
-- **FR-003**: BenchmarkHarness MUST execute all 3 scenarios (System 1 Pure, System 2 Pure, Adaptive Cascade) on the exact same frozen 200-sample test set to ensure unbiased comparisons.
-- **FR-004**: BenchmarkHarness MUST measure latency per request using high-precision timers (time.perf_counter).
-- **FR-005**: BenchmarkHarness MUST record prefill tokens and decode tokens for each request.
-- **FR-006**: Evaluator MUST calculate accuracy, macro F1-score, p50/p95/p99 latencies, and APGR metric for each scenario.
+- **FR-001**: System2Engine (Component F §5.6) MUST construct system and user prompts requiring step-by-step Chain-of-Thought reasoning prior to returning the final classification.
+- **FR-002**: System2Engine (Component F §5.6) MUST enforce strict JSON formatting (reasoning and label: Entailment or Contradiction).
+- **FR-003**: BenchmarkHarness (Component G §5.7) MUST execute all 3 scenarios (System 1 Pure, System 2 Pure, Adaptive Cascade) on the exact same frozen 200-sample test set to ensure unbiased comparisons.
+- **FR-004**: BenchmarkHarness (Component G §5.7) MUST measure latency per request using high-precision timers (`time.perf_counter`).
+- **FR-005**: BenchmarkHarness (Component G §5.7) MUST record prefill tokens and decode tokens for each request.
+- **FR-006**: BenchmarkHarness (Component G §5.7) MUST calculate accuracy, macro F1-score, $p50/p95/p99$ latencies, and APGR metric for each scenario.
 
 ### Non-Functional Requirements *(AI-critical)*
 
-- **NFR-001**: System 2 execution MUST remain bounded (max_tokens <= 256) to prevent run-away generation cost during fallback.
-- **NFR-002**: Benchmark logging MUST persist raw data to results/raw_benchmark_data.json for auditability and post-hoc analysis.
+- **NFR-001**: System 2 execution MUST remain bounded (`max_tokens` <= 256) to prevent run-away generation cost during fallback.
+- **NFR-002**: Benchmark logging MUST persist raw data to `results/raw_benchmark_data.json` for auditability and post-hoc analysis.
 
 ### Key Entities
 
-- **System2Output**: Dataclass containing reasoning, label, prompt_tokens, completion_tokens, latency_ms, fallback_used.
-- **BenchmarkResult**: Dataclass containing query_id, scenario, confidence, entropy, routed_to_s2, latency_ms, tokens_prefill, tokens_decode, prediction, ground_truth, is_correct.
-- **SummaryReport**: Aggregated metrics containing p50/p95/p99 latencies, total tokens, Accuracy, F1-Score, and APGR.
+- **`System2Output`**: Dataclass containing reasoning, label, prompt_tokens, completion_tokens, latency_ms, fallback_used.
+- **`BenchmarkResult`**: Dataclass containing query_id, scenario, confidence, entropy, routed_to_s2, latency_ms, tokens_prefill, tokens_decode, prediction, ground_truth, is_correct.
+- **`SummaryReport`**: Aggregated metrics containing $p50/p95/p99$ latencies, total tokens, Accuracy, F1-Score, and APGR.
 
 ## Success Criteria *(mandatory)*
 
 - **SC-001**: System 2 JSON parsing success rate >= 95% on the test set.
-- **SC-002**: Benchmark Harness produces valid p50, p95, p99 latency percentiles and token counts for 100% of the 200 test samples across all 3 scenarios.
-- **SC-003**: Adaptive Cascade achieves p95 latency reduction >= 50% vs System 2 Pure while recovering >= 95% APGR accuracy.
+- **SC-002**: Benchmark Harness produces valid $p50, p95, p99$ latency percentiles and token counts for 100% of the 200 test samples across all 3 scenarios.
+- **SC-003**: Adaptive Cascade achieves $p95$ latency reduction >= 50% vs System 2 Pure while recovering >= 95% APGR accuracy.
 
 ## Assumptions
 
 - vLLM chat completions endpoint is healthy and accessible locally.
-- Frozen eval set of 200 samples is loaded deterministically from loader.py.
+- Frozen eval set of 200 samples is loaded deterministically from `loader.py`.

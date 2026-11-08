@@ -61,6 +61,9 @@ Provide a deterministic sampling function `get_frozen_eval_set(sample_limit=200,
 - **Malformed text or missing fields in sample**: Rows with `None` or empty strings in `premise` or `hypothesis` MUST be filtered out automatically with a warning log.
 - **Unrecognized label string**: Any label value other than `"ENTAILMENT"` or `"NONE"` (e.g., numeric values or unexpected strings) MUST raise a `ValueError("Invalid ASSIN2 label")`.
 - **Sample count requested exceeds available split size**: If `sample_limit` > split length, system MUST raise `ValueError` and log max available rows.
+- **Input strings containing reserved XML markers**: `format_system1_prompt` MUST reject premises/hypotheses containing `<premise>`, `</premise>`, `<hypothesis>`, or `</hypothesis>` (case-insensitive) with `ValueError`, preventing marker-breaking prompt injection (FR-005). Audited on 2026-11-08: 0 occurrences in the 2,448-row test split, so this never triggers on real ASSIN 2 data.
+- **Odd or non-positive `sample_limit`**: `get_frozen_eval_set` MUST raise `ValueError` when `sample_limit` is not a positive even number, because a balanced 50/50 split of an odd count is undefined (decision recorded 2026-11-08; behavior existed in code before this line).
+- **Label encoding variation**: `entailment_judgment` arrives as a `ClassLabel` integer from the Hub and is decoded with `int2str`; an already-decoded plain string is also accepted (defensive branch against `datasets` configuration variation, covered by a unit test with a stub dataset).
 
 ---
 

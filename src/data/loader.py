@@ -6,7 +6,7 @@ requisitos completos e stories em docs/dataset-loader-spec.md.
 
 import logging
 import random
-from typing import TypedDict
+from typing import Final, Literal, TypedDict
 
 from datasets import ClassLabel, load_dataset
 
@@ -14,7 +14,12 @@ logger = logging.getLogger(__name__)
 
 ASSIN2_DATASET_ID = "nilc-nlp/assin2"
 
-_LABEL_MAP = {"ENTAILMENT": "Entailment", "NONE": "Contradiction"}
+ENTAILMENT_LABEL: Final = "Entailment"
+CONTRADICTION_LABEL: Final = "Contradiction"
+
+Label = Literal["Entailment", "Contradiction"]
+
+_LABEL_MAP: dict[str, Label] = {"ENTAILMENT": ENTAILMENT_LABEL, "NONE": CONTRADICTION_LABEL}
 
 _REQUIRED_COLUMNS = (
     "sentence_pair_id",
@@ -36,7 +41,7 @@ class ASSIN2Sample(TypedDict):
 
     hypothesis: str
 
-    label: str
+    label: Label
 
     original_score: float
 
@@ -58,9 +63,22 @@ class FormattedPromptPayload(TypedDict):
     choices: list[str]
 
 
+_XML_MARKERS = ("<premise>", "</premise>", "<hypothesis>", "</hypothesis>")
+
+
 def _require_text(name: str, value: object) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
+    lowered = value.casefold()
+    if any(marker in lowered for marker in _XML_MARKERS):
+        raise ValueError(
+            f"{name} must not contain reserved XML markers "
+            f"({_XML_MARKERS}); they would break the prompt structure"
+        )
+
+
+def _is_blank(value: object) -> bool:
+    return not isinstance(value, str) or not value.strip()
 
 
 def format_system1_prompt(premise: str, hypothesis: str) -> FormattedPromptPayload:
@@ -69,7 +87,7 @@ def format_system1_prompt(premise: str, hypothesis: str) -> FormattedPromptPaylo
     return FormattedPromptPayload(
         system_prefix=SYSTEM1_SYSTEM_PREFIX,
         user_state=f"<premise>\n{premise}\n</premise>\n<hypothesis>\n{hypothesis}\n</hypothesis>",
-        choices=["Entailment", "Contradiction"],
+        choices=[ENTAILMENT_LABEL, CONTRADICTION_LABEL],
     )
 
 
@@ -84,7 +102,7 @@ def get_frozen_eval_set(
     samples = load_assin2_raw_split(split=split)
     per_class = sample_limit // 2
 
-    by_label: dict[str, list[ASSIN2Sample]] = {"Entailment": [], "Contradiction": []}
+    by_label: dict[str, list[ASSIN2Sample]] = {ENTAILMENT_LABEL: [], CONTRADICTION_LABEL: []}
     for sample in samples:
         by_label[sample["label"]].append(sample)
 
@@ -108,7 +126,7 @@ def get_frozen_eval_set(
     )
 
 
-def normalize_label(raw: str) -> str:
+def normalize_label(raw: str) -> Label:
     if raw in _LABEL_MAP:
         return _LABEL_MAP[raw]
     raise ValueError("Invalid ASSIN2 label")
@@ -137,7 +155,7 @@ def load_assin2_raw_split(split: str = "test") -> list[ASSIN2Sample]:
     for row in dataset:
         premise = row["premise"]
         hypothesis = row["hypothesis"]
-        if not premise or not hypothesis:
+        if _is_blank(premise) or _is_blank(hypothesis):
             dropped_rows += 1
             continue
         raw_label = row["entailment_judgment"]
@@ -155,7 +173,7 @@ def load_assin2_raw_split(split: str = "test") -> list[ASSIN2Sample]:
 
     if dropped_rows:
         logger.warning(
-            "dropped %d rows from '%s' (split=%s) with empty premise or hypothesis",
+            "dropped %d rows from '%s' (split=%s) with empty or blank premise or hypothesis",
             dropped_rows,
             ASSIN2_DATASET_ID,
             split,

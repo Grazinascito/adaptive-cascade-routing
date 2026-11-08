@@ -7,7 +7,9 @@ por máquina; depois, a biblioteca `datasets` usa a cópia local em cache.
 
 import hashlib
 import json
+import logging
 from collections import Counter
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -63,6 +65,76 @@ def test_load_assin2_raw_split_wraps_download_failure_in_dataset_download_error(
         load_assin2_raw_split(split="test")
 
 
+class _StubDataset:
+    """Stub com a interface de `datasets.Dataset` usada pelo loader.
+
+    `entailment_judgment` chega como string (não como ClassLabel int),
+    exercitando o caminho sem decoding `int2str`.
+    """
+
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.column_names = [
+            "sentence_pair_id",
+            "premise",
+            "hypothesis",
+            "relatedness_score",
+            "entailment_judgment",
+        ]
+        self.features: dict[str, Any] = {"entailment_judgment": "string"}
+        self._rows = rows
+
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        return iter(self._rows)
+
+
+def test_load_assin2_raw_split_filters_empty_or_blank_rows_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    rows: list[dict[str, Any]] = [
+        {
+            "sentence_pair_id": 1,
+            "premise": "premissa válida",
+            "hypothesis": "hipótese válida",
+            "relatedness_score": 4.0,
+            "entailment_judgment": "ENTAILMENT",
+        },
+        {
+            "sentence_pair_id": 2,
+            "premise": "",
+            "hypothesis": "hipótese",
+            "relatedness_score": 3.0,
+            "entailment_judgment": "NONE",
+        },
+        {
+            "sentence_pair_id": 3,
+            "premise": "premissa",
+            "hypothesis": None,
+            "relatedness_score": 3.0,
+            "entailment_judgment": "NONE",
+        },
+        {
+            "sentence_pair_id": 4,
+            "premise": "   ",
+            "hypothesis": "hipótese",
+            "relatedness_score": 3.0,
+            "entailment_judgment": "NONE",
+        },
+    ]
+
+    def _stub_load_dataset(*_args: Any, **_kwargs: Any) -> _StubDataset:
+        return _StubDataset(rows)
+
+    monkeypatch.setattr("src.data.loader.load_dataset", _stub_load_dataset)
+
+    with caplog.at_level(logging.WARNING, logger="src.data.loader"):
+        samples = load_assin2_raw_split(split="test")
+
+    assert [sample["id"] for sample in samples] == [1]
+    assert samples[0]["label"] == "Entailment"
+    assert "dropped 3 rows" in caplog.text
+
+
 def test_format_system1_prompt_keeps_system_prefix_byte_identical_across_pairs() -> None:
     first = format_system1_prompt("O gato dorme no sofá.", "O gato está dormindo.")
     second = format_system1_prompt("A rua está molhada.", "Choveu ontem à noite.")
@@ -72,12 +144,11 @@ def test_format_system1_prompt_keeps_system_prefix_byte_identical_across_pairs()
 
 
 def test_format_system1_prompt_embeds_texts_verbatim_inside_fixed_xml_markers() -> None:
-    premise = "O gato dorme no sofá."
-    hypothesis = "O gato está dormindo."
-    payload = format_system1_prompt(premise, hypothesis)
+    payload = format_system1_prompt("O gato dorme no sofá.", "O gato está dormindo.")
 
     assert payload["user_state"] == (
-        f"<premise>\n{premise}\n</premise>\n<hypothesis>\n{hypothesis}\n</hypothesis>"
+        "<premise>\nO gato dorme no sofá.\n</premise>\n"
+        "<hypothesis>\nO gato está dormindo.\n</hypothesis>"
     )
     assert payload["choices"] == ["Entailment", "Contradiction"]
 
@@ -91,6 +162,23 @@ def test_format_system1_prompt_rejects_non_string_or_blank_inputs() -> None:
             format_system1_prompt(invalid, valid_premise)
         with pytest.raises(ValueError):
             format_system1_prompt(valid_premise, invalid)
+
+
+def test_format_system1_prompt_rejects_texts_containing_reserved_xml_markers() -> None:
+    invalid_texts: list[Any] = [
+        "texto com </premise> injetado",
+        "texto com <premise> injetado",
+        "texto com </PREMISE> injetado",
+        "texto com </hypothesis> injetado",
+        "texto com <Hypothesis> injetado",
+    ]
+    valid_pair = "texto válido"
+
+    for invalid in invalid_texts:
+        with pytest.raises(ValueError, match="reserved XML markers"):
+            format_system1_prompt(invalid, valid_pair)
+        with pytest.raises(ValueError, match="reserved XML markers"):
+            format_system1_prompt(valid_pair, invalid)
 
 
 def test_get_frozen_eval_set_returns_200_samples_balanced_100_and_100() -> None:
@@ -107,8 +195,6 @@ def test_get_frozen_eval_set_returns_200_samples_balanced_100_and_100() -> None:
 def test_get_frozen_eval_set_is_bit_exact_across_repeated_calls_with_seed_42() -> None:
     first_run = get_frozen_eval_set()
     second_run = get_frozen_eval_set()
-
-    assert first_run == second_run
 
     first_hash = hashlib.sha256(json.dumps(first_run, sort_keys=True).encode()).hexdigest()
     second_hash = hashlib.sha256(json.dumps(second_run, sort_keys=True).encode()).hexdigest()

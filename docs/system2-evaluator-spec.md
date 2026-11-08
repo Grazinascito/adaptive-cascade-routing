@@ -24,7 +24,7 @@ Implement the slow-path fallback module (`System2Engine`) that accepts ambiguous
 **Independent Test**: Execute 20 sample NLI pairs through `execute_reasoning()`. Pass threshold: >= 95% valid JSON outputs parsed without fallback regex, with correct label schema.
 
 **Acceptance Scenarios**:
-1. **Given** a premise and hypothesis flagged with high entropy by the router, **When** `execute_reasoning(premise, hypothesis)` is called via `/v1/chat/completions`, **Then** the engine returns a `System2Output` dataclass containing `reasoning`, `label`, `tokens_used`, and `latency_ms`.
+1. **Given** a premise and hypothesis flagged with high entropy by the router, **When** `execute_reasoning(premise, hypothesis)` is called via `/v1/chat/completions`, **Then** the engine returns a `System2Output` TypedDict containing `reasoning`, `label`, `prompt_tokens` + `completion_tokens`, `latency_ms`, and `fallback_used` (field list per Key Entities below).
 2. **Given** a non-compliant JSON response from the LLM, **When** JSON decoding fails, **Then** the system gracefully falls back to regex label extraction (`Contradiction` or `Entailment`) and logs a warning without crashing.
 
 ---

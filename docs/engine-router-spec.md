@@ -9,7 +9,7 @@
 ## Component Overview
 
 - **Component B (§5.2): vLLM Serving Infrastructure (`vLLMServerManager`)**: Launches and monitors the local vLLM background engine with `--enable-prefix-caching`.
-- **Component C (§5.3): System 1 Typed Decision Engine (`system1.py`)**: Executes single-token typed decisions against `/v1/systemone` with `max_tokens=1` and `logprobs=True`.
+- **Component C (§5.3): System 1 Typed Decision Engine (`system1.py`)**: Executes single-token typed decisions against `/v1/systemone`, declaring a `choice` question whose `criteria` options are the NLI labels; the server answers with per-option `probabilities` (softmax over one-token labels).
 - **Component D (§5.4): Confidence & Entropy Evaluator (`router.py`)**: `compute_metrics(logprobs, choices)` (composed of `softmax` and `shannon_entropy`) computes Softmax probabilities, top confidence, and Shannon Entropy over candidate choices.
 - **Component E (§5.5): Adaptive Cascade Router (`router.py`)**: `route(query, confidence, alpha, system2)` evaluates query confidence against cost threshold $\alpha$ to route between System 1 Fast-Path and System 2 Slow-Path, dispatching to an injected System 2 handler.
 
@@ -35,14 +35,14 @@ Configure, launch, and monitor the local `vLLM` inference server on an air-gappe
 
 ### Story 2 - Single-Token Typed Decision Inference via `/v1/systemone` (Component C §5.3, Type: functionality, Priority: P1)
 
-Implement the `System1Engine` interface to execute single-token typed decisions against vLLM's `/v1/systemone` endpoint, requesting `max_tokens=1` and `logprobs=True` for specified choices (`["Entailment", "Contradiction"]`).
+Implement the `System1Engine` interface to execute single-token typed decisions against vLLM's `/v1/systemone` Structured Decisions endpoint. The request declares one `choice` question with the candidate labels as `criteria` options (`{"Entailment": null, "Contradiction": null}`) and the fixed system prompt in the top-level `instructions` field (identical across queries, for prefix caching); the server maps each option to a one-token label, applies softmax server-side, and returns per-option `probabilities` in the answer. There are no `max_tokens`/`logprobs`/`choices` request fields — unknown fields are rejected with HTTP 400 — so the engine derives logprobs $\ln(P)$ from the returned probabilities and feeds them to `compute_metrics` (Component D).
 
 **Why this priority**: Essential functionality — forms the Fast-Path mechanism that eliminates autoregressive decode iterations, achieving sub-60ms response times for high-confidence items.
 
-**Independent Test**: Deterministic execution against 50 validation samples from ASSIN 2, verifying that 100% of responses return `max_tokens=1`, contain raw logprobs for all target choices, and execute with latency $p95 < 60\text{ms}$.
+**Independent Test**: Deterministic execution against 50 validation samples from ASSIN 2, verifying that 100% of responses contain `probabilities` for the target choices and execute with latency $p95 < 60\text{ms}$.
 
 **Acceptance Scenarios**:
-1. **Given** a formatted NLI prompt (`state`), **When** `System1Engine.evaluate_typed_decision(state, choices=["Entailment", "Contradiction"])` is invoked, **Then** the engine receives an HTTP response containing log-probabilities $\ln(P)$ for both candidate tokens without generating any secondary tokens.
+1. **Given** a formatted NLI prompt (`state`), **When** `System1Engine.evaluate_typed_decision(state, choices=["Entailment", "Contradiction"])` is invoked, **Then** the engine receives an HTTP response containing per-option `probabilities` for both candidate labels (from which $\ln(P)$ logprobs are derived) without any autoregressive decoding.
 2. **Given** invalid or out-of-vocabulary candidate choices, **When** `evaluate_typed_decision` is called, **Then** the engine raises a `ValueError` with clear diagnostic context before dispatching the HTTP call.
 
 ---
@@ -90,8 +90,8 @@ Implement `route(query, confidence, alpha, system2)` in `router.py`, following B
 
 ### Functional Requirements
 
-- **FR-001**: System MUST start and manage a local `vLLM` server instance listening on port 8000 with AWQ 4-bit quantization and `--enable-prefix-caching` (Component B §5.2).
-- **FR-002**: System MUST expose `System1Engine.evaluate_typed_decision()` to send HTTP POST requests to `/v1/systemone` specifying `max_tokens=1` and `choices=["Entailment", "Contradiction"]` (Component C §5.3).
+- **FR-001**: System MUST start and manage a local `vLLM` server instance listening on port 8000 with AWQ 4-bit quantization, `--enable-prefix-caching`, and `--logprobs-mode raw_logprobs` (the flag the `/v1/systemone` API requires to serve per-option probabilities) (Component B §5.2).
+- **FR-002**: System MUST expose `System1Engine.evaluate_typed_decision()` to send HTTP POST requests to `/v1/systemone` declaring a `choice` question whose `criteria` options are `["Entailment", "Contradiction"]` (Component C §5.3). Per-option `probabilities` in the response are converted to logprobs $\ln(P)$ and fed to `compute_metrics` (FR-003).
 - **FR-003**: System MUST compute Softmax-normalized probabilities $P(y_k \mid x) = \frac{\exp(l_k)}{\sum_{j=1}^K \exp(l_j)}$ from raw candidate logprobs (Component D §5.4).
 - **FR-004**: System MUST compute Shannon Entropy $\text{Entropy}(P) = -\sum_{k=1}^K P(y_k \mid x) \log_2 P(y_k \mid x)$ and Top Confidence $\text{Confidence}(x) = \max_k P(y_k \mid x)$ for every query (Component D §5.4).
 - **FR-005**: System MUST implement the RouteLLM decision function $R_\alpha(q)$ (Component E §5.5):
@@ -107,8 +107,8 @@ Implement `route(query, confidence, alpha, system2)` in `router.py`, following B
 
 ### Key Entities
 
-- **`System1Output`**: Data transfer object holding top choice, top probability, raw logprobs dict, normalized probabilities dict, Shannon entropy, and latency in ms.
-- **`System2Output`**: Data transfer object holding Chain-of-Thought reasoning string, extracted label, JSON parsing status, and latency in ms.
+- **`System1Output`**: TypedDict holding top choice (`Label`), top probability, the derived logprobs dict ($\ln$ of the server probabilities), normalized probabilities dict, Shannon entropy, and latency in ms.
+- **`System2Output`**: TypedDict holding Chain-of-Thought reasoning string, extracted label, prompt/completion token counts, latency in ms, and the `fallback_used` flag (canonical field list in `system2-evaluator-spec` Key Entities).
 - **`DecisionMetrics`**: TypedDict returned by `compute_metrics` holding `top_choice`, top `confidence`, Shannon `entropy` in bits, and the normalized `probabilities` dict.
 - **`RouteOutcome`**: TypedDict returned by `route` holding the `route` decision (`"SYSTEM_1"` or `"SYSTEM_2"`), the `routed_to_system_2` flag, and the `system2_prediction` (`None` on the fast-path).
 - **`CascadeResult`**: Unified record of a single benchmark item execution containing all System 1 metrics, routing flags, System 2 metrics (if invoked), and final decision vs ground truth.
@@ -126,6 +126,6 @@ Implement `route(query, confidence, alpha, system2)` in `router.py`, following B
 
 ## Assumptions
 
-- Assumes vLLM version >= 0.32.0 with `/v1/systemone` endpoint support installed in the execution environment.
+- Assumes vLLM version >= 0.32.0 with the `/v1/systemone` Structured Decisions API installed in the execution environment and served with `--logprobs-mode raw_logprobs`.
 - Assumes the underlying GPU model (`Qwen/Qwen2.5-7B-Instruct-AWQ` or similar 7B AWQ model) fits within 16GB VRAM alongside the KV cache allocated by vLLM.
 - Assumes the frozen 200-sample test set from ASSIN 2 contains balanced representations of `Entailment` and `Contradiction` labels.

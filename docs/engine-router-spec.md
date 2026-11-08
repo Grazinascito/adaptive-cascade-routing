@@ -10,8 +10,10 @@
 
 - **Component B (§5.2): vLLM Serving Infrastructure (`vLLMServerManager`)**: Launches and monitors the local vLLM background engine with `--enable-prefix-caching`.
 - **Component C (§5.3): System 1 Typed Decision Engine (`system1.py`)**: Executes single-token typed decisions against `/v1/systemone` with `max_tokens=1` and `logprobs=True`.
-- **Component D (§5.4): Confidence & Entropy Evaluator (`router.py`)**: Computes Softmax probabilities, top confidence, and Shannon Entropy over candidate choices.
-- **Component E (§5.5): Adaptive Cascade Router (`CascadeRouter` in `router.py`)**: Evaluates query confidence against cost threshold $\alpha$ to route between System 1 Fast-Path and System 2 Slow-Path.
+- **Component D (§5.4): Confidence & Entropy Evaluator (`router.py`)**: `compute_metrics(logprobs, choices)` (composed of `softmax` and `shannon_entropy`) computes Softmax probabilities, top confidence, and Shannon Entropy over candidate choices.
+- **Component E (§5.5): Adaptive Cascade Router (`router.py`)**: `route(query, confidence, alpha, system2)` evaluates query confidence against cost threshold $\alpha$ to route between System 1 Fast-Path and System 2 Slow-Path, dispatching to an injected System 2 handler.
+
+`EntropyEvaluator` and `CascadeRouter` are the component names used by the design doc (§5.4/§5.5) and by the `router.py` module docstring. The implemented API follows the `loader.py` convention — data shapes as TypedDicts, behavior in module-level functions.
 
 ---
 
@@ -47,38 +49,38 @@ Implement the `System1Engine` interface to execute single-token typed decisions 
 
 ### Story 3 - Softmax Normalization, Confidence Scoring, and Shannon Entropy Evaluation (Component D §5.4, Type: functionality, Priority: P2)
 
-Implement mathematical evaluation functions in `router.py` (`EntropyEvaluator`) to convert raw logprobs into a normalized probability distribution $P$, top confidence $\text{Confidence}(x)$, and Shannon Entropy $\text{Entropy}(P)$.
+Implement the mathematical evaluation functions in `router.py` — `softmax(logprobs, choices)`, `shannon_entropy(probabilities)`, and `compute_metrics(logprobs, choices)` — to convert raw logprobs into a normalized probability distribution $P$, top confidence $\text{Confidence}(x)$, and Shannon Entropy $\text{Entropy}(P)$. `compute_metrics` returns a `DecisionMetrics` record (`top_choice`, `confidence`, `entropy`, `probabilities`).
 
 **Why this priority**: Core mathematical engine — provides the uncertainty signals required by the Adaptive Cascade Router to distinguish unambiguous items from ambiguous edge cases.
 
 **Independent Test**: Unit test suite verifying mathematical correctness against synthetic logprob inputs with known analytical solutions (e.g., uniform distribution yields maximum entropy $H(P) = 1.0$ bit; deterministic distribution yields $H(P) = 0.0$ bit).
 
 **Acceptance Scenarios**:
-1. **Given** logprob vector $l = [\ln(0.9), \ln(0.1)]$, **When** `EntropyEvaluator.compute_metrics(l)` is executed, **Then** it returns $\text{Confidence} = 0.9000 \pm 10^{-4}$ and $\text{Entropy} \approx 0.4690$ bits.
-2. **Given** equal logprobs $l = [\ln(0.5), \ln(0.5)]$, **When** `compute_metrics` is executed, **Then** it returns $\text{Confidence} = 0.5000$ and maximum Shannon Entropy $\text{Entropy} = 1.0000$ bit.
+1. **Given** logprobs `{"Entailment": ln(0.9), "Contradiction": ln(0.1)}` and `choices=["Entailment", "Contradiction"]`, **When** `compute_metrics(logprobs, choices)` is executed, **Then** it returns $\text{Confidence} = 0.9000 \pm 10^{-4}$ and $\text{Entropy} \approx 0.4690$ bits.
+2. **Given** equal logprobs `{"Entailment": ln(0.5), "Contradiction": ln(0.5)}`, **When** `compute_metrics(logprobs, choices)` is executed, **Then** it returns $\text{Confidence} = 0.5000$ and maximum Shannon Entropy $\text{Entropy} = 1.0000$ bit, with `top_choice = "Entailment"` (ties break by the first label in `choices` order).
 
 ---
 
 ### Story 4 - Adaptive Cascade Routing and Fallback Decision (Component E §5.5, Type: hypothesis, Priority: P2)
 
-Implement `CascadeRouter.route(query, confidence, threshold_alpha)` following Berkeley's RouteLLM framework $R_\alpha(q)$ to route high-confidence queries to System 1 output and low-confidence queries (uncertainty $\text{Confidence} < \alpha$) to System 2 fallback.
+Implement `route(query, confidence, alpha, system2)` in `router.py`, following Berkeley's RouteLLM framework $R_\alpha(q)$, to route high-confidence queries ($\text{Confidence} \ge \alpha$) to the System 1 fast-path without invoking System 2, and low-confidence queries ($\text{Confidence} < \alpha$) to a System 2 fallback handler received by injection (`System2Handler = Callable[[RoutingQuery], Label]`). `route` returns a `RouteOutcome` record (`route`, `routed_to_system_2`, `system2_prediction`).
 
 **Why this priority**: The cornerstone of the project — tests the hypothesis that routing queries with $\text{Confidence} < \alpha$ to System 2 recovers >= 95% of System 2 standalone accuracy while keeping System 2 invocation rate below 20%.
 
 **Independent Test**: Execution over the frozen 200-sample ASSIN 2 test set across thresholds $\alpha \in \{0.50, 0.70, 0.85, 0.95\}$, verifying monotonic trade-offs between System 2 call rate, $p95$ latency, and overall F1-Score.
 
 **Acceptance Scenarios**:
-1. **Given** a query with $\text{Confidence} = 0.92$ and threshold $\alpha = 0.85$, **When** `CascadeRouter.route()` is called, **Then** it returns `route = "SYSTEM_1"`, `routed_to_system_2 = False`, and completes without invoking System 2.
-2. **Given** a query with $\text{Confidence} = 0.61$ and threshold $\alpha = 0.85$, **When** `CascadeRouter.route()` is called, **Then** it returns `route = "SYSTEM_2"`, `routed_to_system_2 = True`, and dispatches the payload to `System2Engine`.
+1. **Given** a query with $\text{Confidence} = 0.92$ and threshold $\alpha = 0.85$, **When** `route(query, confidence=0.92, alpha=0.85, system2=handler)` is called, **Then** it returns `route = "SYSTEM_1"`, `routed_to_system_2 = False`, `system2_prediction = None`, and completes without invoking the System 2 handler.
+2. **Given** a query with $\text{Confidence} = 0.61$ and threshold $\alpha = 0.85$, **When** `route(query, confidence=0.61, alpha=0.85, system2=handler)` is called, **Then** it returns `route = "SYSTEM_2"`, `routed_to_system_2 = True`, and dispatches the `RoutingQuery` payload (`premise` + `hypothesis`) to the injected handler, returning its `Label` as `system2_prediction`.
 
 ---
 
 ### Edge Cases
 
 - **Model Logprob Omission**: What happens if vLLM fails to return logprobs for one of the candidate tokens in the choices list?  
-  *Handling*: Assign a default logprob floor $l_k = -100.0$ ($P \approx 0$) to unreturned candidates and normalize over the present candidate tokens.
+  *Handling*: `softmax` assigns the module constant `LOGPROB_FLOOR = -100.0` ($P \approx 0$) to candidates missing from the logprobs dict and normalizes over `choices`. Logprob keys outside `choices` are ignored, and an input carrying no logprob for any choice ("no signal") raises `ValueError`.
 - **Extreme Uniform Uncertainty ($P_{\text{top}} = 0.5000$)**: How does the system handle exact 50/50 ties between `Entailment` and `Contradiction`?  
-  *Handling*: Any query with $\text{Confidence} < \alpha$ automatically triggers System 2 fallback; at $\alpha = 0.85$, exact ties are routed to System 2 100% of the time.
+  *Handling*: `compute_metrics` breaks probability ties deterministically by the first label in `choices` order; any query with $\text{Confidence} < \alpha$ automatically triggers System 2 fallback, so at $\alpha = 0.85$ exact ties are routed to System 2 100% of the time.
 - **vLLM Process Crash / OOM**: How does `vLLMServerManager` handle GPU Out-Of-Memory errors during heavy KV cache allocation?  
   *Handling*: Catch connection timeouts/refusals, log structured failure event with GPU VRAM stats, and throw `vLLMServerException` with restart instructions.
 - **Malformed System 2 JSON Output**: What happens if System 2 fallback returns non-JSON or unparseable text?  
@@ -107,6 +109,8 @@ Implement `CascadeRouter.route(query, confidence, threshold_alpha)` following Be
 
 - **`System1Output`**: Data transfer object holding top choice, top probability, raw logprobs dict, normalized probabilities dict, Shannon entropy, and latency in ms.
 - **`System2Output`**: Data transfer object holding Chain-of-Thought reasoning string, extracted label, JSON parsing status, and latency in ms.
+- **`DecisionMetrics`**: TypedDict returned by `compute_metrics` holding `top_choice`, top `confidence`, Shannon `entropy` in bits, and the normalized `probabilities` dict.
+- **`RouteOutcome`**: TypedDict returned by `route` holding the `route` decision (`"SYSTEM_1"` or `"SYSTEM_2"`), the `routed_to_system_2` flag, and the `system2_prediction` (`None` on the fast-path).
 - **`CascadeResult`**: Unified record of a single benchmark item execution containing all System 1 metrics, routing flags, System 2 metrics (if invoked), and final decision vs ground truth.
 
 ---

@@ -112,8 +112,8 @@ adaptive-cascade-routing/
 ├── docs/
 │   ├── adaptive-cascade-design-doc.md   # Este documento
 │   ├── dataset-loader-spec.md           # Stories do Componente A
-│   ├── engine-router-spec.md            # Stories dos Componentes B–D
-│   ├── system2-evaluator-spec.md        # Stories dos Componentes E–G
+│   ├── engine-router-spec.md            # Stories dos Componentes B–E
+│   ├── system2-evaluator-spec.md        # Stories dos Componentes F–G
 │   └── adr/                             # Registros de decisão de arquitetura
 ├── src/
 │   ├── __init__.py
@@ -132,8 +132,8 @@ adaptive-cascade-routing/
 ├── notebook/
 │   └── adaptive_cascade_benchmark.ipynb # Google Colab Notebook executável ponta a ponta (Marco 1)
 ├── results/
-│   ├── raw_benchmark_data.json    # Logs detalhados de cada requisição do benchmark
-│   └── latency_cost_tradeoff.png  # Gráficos de dispersão e Curva de APGR vs Custo
+│   ├── raw_benchmark_data.json    # Logs detalhados de cada requisição do benchmark (Marco 1)
+│   └── latency_cost_tradeoff.png  # Gráficos de dispersão e Curva de APGR vs Custo (Marco 1)
 └── tests/
     ├── test_config.py             # Contrato congelado do benchmark_config.yaml
     └── test_structure.py          # Importação de todos os módulos esqueleto

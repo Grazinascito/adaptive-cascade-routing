@@ -6,7 +6,7 @@ com uv é a fonte da verdade (lockfile `uv.lock` commitado), vLLM vive no extra 
 (nunca instalado no macOS), e `requirements.txt` (core) + `requirements-colab.txt` (com vLLM)
 são exportados do lock e commitados porque o pip do Colab não lê `uv.lock`.
 
-## Considered Options
+## Opções Consideradas
 
 - **requirements.txt único incluindo vllm**: rejeitado — `pip install -r requirements.txt`
   falha no macOS (vLLM exige CUDA), quebrando o ambiente de desenvolvimento.

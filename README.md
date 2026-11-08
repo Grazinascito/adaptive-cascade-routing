@@ -80,8 +80,8 @@ adaptive-cascade-routing/
 ├── docs/
 │   ├── adaptive-cascade-design-doc.md   # Full design doc (PT-BR)
 │   ├── dataset-loader-spec.md           # Component A stories & testing
-│   ├── engine-router-spec.md            # Components B–D stories & testing
-│   ├── system2-evaluator-spec.md        # Components E–G stories & testing
+│   ├── engine-router-spec.md            # Components B–E stories & testing
+│   ├── system2-evaluator-spec.md        # Components F–G stories & testing
 │   └── adr/                             # Architecture decision records
 ├── src/
 │   ├── __init__.py
@@ -100,8 +100,8 @@ adaptive-cascade-routing/
 ├── notebook/
 │   └── adaptive_cascade_benchmark.ipynb # Google Colab end-to-end executable notebook (Marco 1)
 ├── results/
-│   ├── raw_benchmark_data.json      # Request-level execution logs
-│   └── latency_cost_tradeoff.png    # APGR vs token savings trade-off visualization
+│   ├── raw_benchmark_data.json      # Request-level execution logs (Marco 1)
+│   └── latency_cost_tradeoff.png    # APGR vs token savings trade-off visualization (Marco 1)
 └── tests/
     ├── test_config.py               # Frozen benchmark contract (config keys and values)
     └── test_structure.py            # All skeleton modules import without error

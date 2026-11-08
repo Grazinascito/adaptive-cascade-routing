@@ -5,6 +5,7 @@ requisitos completos e stories em docs/dataset-loader-spec.md.
 """
 
 import logging
+import random
 from typing import TypedDict
 
 from datasets import ClassLabel, load_dataset
@@ -69,6 +70,41 @@ def format_system1_prompt(premise: str, hypothesis: str) -> FormattedPromptPaylo
         system_prefix=SYSTEM1_SYSTEM_PREFIX,
         user_state=f"<premise>\n{premise}\n</premise>\n<hypothesis>\n{hypothesis}\n</hypothesis>",
         choices=["Entailment", "Contradiction"],
+    )
+
+
+def get_frozen_eval_set(
+    split: str = "test",
+    sample_limit: int = 200,
+    seed: int = 42,
+) -> list[ASSIN2Sample]:
+    if sample_limit <= 0 or sample_limit % 2 != 0:
+        raise ValueError(f"sample_limit must be a positive even number, got {sample_limit}")
+
+    samples = load_assin2_raw_split(split=split)
+    per_class = sample_limit // 2
+
+    by_label: dict[str, list[ASSIN2Sample]] = {"Entailment": [], "Contradiction": []}
+    for sample in samples:
+        by_label[sample["label"]].append(sample)
+
+    for label, group in by_label.items():
+        if len(group) < per_class:
+            logger.error(
+                "not enough '%s' samples in split '%s': need %d, available %d",
+                label,
+                split,
+                per_class,
+                len(group),
+            )
+            raise ValueError(
+                f"sample_limit={sample_limit} needs {per_class} '{label}' samples, "
+                f"but split '{split}' only provides {len(group)}"
+            )
+
+    rng = random.Random(seed)
+    return rng.sample(by_label["Entailment"], per_class) + rng.sample(
+        by_label["Contradiction"], per_class
     )
 
 

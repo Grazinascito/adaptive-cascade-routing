@@ -5,6 +5,8 @@ Os testes de ingestão baixam o dataset real do Hugging Face na primeira execuç
 por máquina; depois, a biblioteca `datasets` usa a cópia local em cache.
 """
 
+import hashlib
+import json
 from collections import Counter
 from typing import Any
 
@@ -14,6 +16,7 @@ from src.data.loader import (
     SYSTEM1_SYSTEM_PREFIX,
     DatasetDownloadError,
     format_system1_prompt,
+    get_frozen_eval_set,
     load_assin2_raw_split,
     normalize_label,
 )
@@ -88,3 +91,33 @@ def test_format_system1_prompt_rejects_non_string_or_blank_inputs() -> None:
             format_system1_prompt(invalid, valid_premise)
         with pytest.raises(ValueError):
             format_system1_prompt(valid_premise, invalid)
+
+
+def test_get_frozen_eval_set_returns_200_samples_balanced_100_and_100() -> None:
+    samples = get_frozen_eval_set()
+
+    assert len(samples) == 200
+    label_counts = Counter(sample["label"] for sample in samples)
+    assert label_counts == Counter({"Entailment": 100, "Contradiction": 100})
+    expected_fields = {"id", "premise", "hypothesis", "label", "original_score"}
+    for sample in samples:
+        assert set(sample) == expected_fields
+
+
+def test_get_frozen_eval_set_is_bit_exact_across_repeated_calls_with_seed_42() -> None:
+    first_run = get_frozen_eval_set()
+    second_run = get_frozen_eval_set()
+
+    assert first_run == second_run
+
+    first_hash = hashlib.sha256(json.dumps(first_run, sort_keys=True).encode()).hexdigest()
+    second_hash = hashlib.sha256(json.dumps(second_run, sort_keys=True).encode()).hexdigest()
+    assert first_hash == second_hash
+
+
+def test_get_frozen_eval_set_rejects_odd_or_excessive_sample_limits() -> None:
+    with pytest.raises(ValueError, match="even"):
+        get_frozen_eval_set(sample_limit=201)
+
+    with pytest.raises(ValueError, match="1224"):
+        get_frozen_eval_set(sample_limit=2500)

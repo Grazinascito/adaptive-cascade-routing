@@ -40,6 +40,38 @@ class ASSIN2Sample(TypedDict):
     original_score: float
 
 
+SYSTEM1_SYSTEM_PREFIX = (
+    "You are a Natural Language Inference classifier for Brazilian Portuguese.\n"
+    "Read the premise and the hypothesis inside the XML tags and decide exactly one label:\n"
+    "- Entailment: the hypothesis follows from the premise.\n"
+    "- Contradiction: the hypothesis does not follow from the premise.\n"
+    "Answer with the label text only."
+)
+
+
+class FormattedPromptPayload(TypedDict):
+    system_prefix: str
+
+    user_state: str
+
+    choices: list[str]
+
+
+def _require_text(name: str, value: object) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+
+
+def format_system1_prompt(premise: str, hypothesis: str) -> FormattedPromptPayload:
+    _require_text("premise", premise)
+    _require_text("hypothesis", hypothesis)
+    return FormattedPromptPayload(
+        system_prefix=SYSTEM1_SYSTEM_PREFIX,
+        user_state=f"<premise>\n{premise}\n</premise>\n<hypothesis>\n{hypothesis}\n</hypothesis>",
+        choices=["Entailment", "Contradiction"],
+    )
+
+
 def normalize_label(raw: str) -> str:
     if raw in _LABEL_MAP:
         return _LABEL_MAP[raw]

@@ -8,6 +8,7 @@ Corresponde à Story 2 de docs/engine-router-spec.md.
 
 import json
 import math
+from typing import cast
 
 import httpx
 import pytest
@@ -108,6 +109,19 @@ def test_evaluate_typed_decision_raises_value_error_before_http_when_choices_are
 
     with pytest.raises(ValueError, match="choices"):
         system1.evaluate_typed_decision(_STATE, ["Entailment"], client=client)
+
+    assert requests == []
+
+
+def test_evaluate_typed_decision_rejects_out_of_vocabulary_choice_before_http() -> None:
+    requests: list[dict[str, object]] = []
+    client = _client_returning({"Entailment": 0.9, "Contradiction": 0.1}, requests)
+    # "Neutral" fica fora do vocabulário de Label de propósito; o cast só
+    # acalma o mypy — o guard testado é o de runtime.
+    oov_choices = cast("list[Label]", ["Entailment", "Neutral"])
+
+    with pytest.raises(ValueError, match="choices"):
+        system1.evaluate_typed_decision(_STATE, oov_choices, client=client)
 
     assert requests == []
 

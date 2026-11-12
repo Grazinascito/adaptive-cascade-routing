@@ -11,7 +11,7 @@ import logging
 import httpx
 import pytest
 
-from src.engine import system1, system2
+from src.engine import serving, system2
 
 _PREMISE = "O gato dorme no sofá."
 _HYPOTHESIS = "O gato está acordado."
@@ -30,7 +30,7 @@ def _chat_response(content: str, *, usage: dict[str, int] | None) -> httpx.Respo
         "id": "chatcmpl-1",
         "object": "chat.completion",
         "created": 0,
-        "model": system1.DEFAULT_MODEL,
+        "model": serving.DEFAULT_MODEL,
         "choices": [
             {
                 "index": 0,
@@ -72,7 +72,7 @@ def test_execute_reasoning_sends_cot_json_prompt_with_zero_temperature_and_max_t
     assert request["url"] == "http://127.0.0.1:8000/v1/chat/completions"
     body = request["body"]
     assert isinstance(body, dict)
-    assert body["model"] == system1.DEFAULT_MODEL
+    assert body["model"] == serving.DEFAULT_MODEL
     assert body["temperature"] == 0.0
     assert body["max_tokens"] == 256
     assert body["chat_template_kwargs"] == {"enable_thinking": False}

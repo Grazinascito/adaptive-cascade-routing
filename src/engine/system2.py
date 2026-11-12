@@ -8,13 +8,12 @@ requisitos completos e stories em docs/system2-evaluator-spec.md (Story 1).
 import json
 import logging
 import re
-import time
 from typing import Final, TypedDict
 
 import httpx
 
 from src.data.loader import CONTRADICTION_LABEL, ENTAILMENT_LABEL, Label
-from src.engine.system1 import DEFAULT_MODEL
+from src.engine.serving import DEFAULT_BASE_URL, DEFAULT_MODEL, post_json
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +41,12 @@ _MODEL_LABELS: Final[dict[str, Label]] = {
 
 
 class System2Output(TypedDict):
+    """Saída do slow-path.
+
+    `reasoning` carrega o CoT extraído do JSON quando `fallback_used=False`
+    e o conteúdo bruto do modelo quando `True` (fallback regex/default).
+    """
+
     reasoning: str
 
     label: Label
@@ -104,7 +109,7 @@ def execute_reasoning(
     hypothesis: str,
     *,
     model: str = DEFAULT_MODEL,
-    base_url: str = "http://127.0.0.1:8000/v1",
+    base_url: str = DEFAULT_BASE_URL,
     max_tokens: int = 256,
     temperature: float = 0.0,
     timeout_s: float = 120.0,
@@ -128,18 +133,7 @@ def execute_reasoning(
         "chat_template_kwargs": {"enable_thinking": False},
     }
 
-    owns_client = client is None
-    active_client = client if client is not None else httpx.Client()
-    try:
-        started = time.perf_counter()
-        response = active_client.post(
-            f"{base_url}/chat/completions", json=payload, timeout=timeout_s
-        )
-        latency_ms = (time.perf_counter() - started) * 1000.0
-        response.raise_for_status()
-    finally:
-        if owns_client:
-            active_client.close()
+    response, latency_ms = post_json(client, f"{base_url}/chat/completions", payload, timeout_s)
 
     data = response.json()
     choices = data.get("choices") or [{}]

@@ -79,6 +79,7 @@ def test_execute_reasoning_sends_cot_json_prompt_with_zero_temperature_and_max_t
     message = body["messages"][0]["content"]
     assert _PREMISE in message
     assert _HYPOTHESIS in message
+    assert "sem blocos de código markdown" in message
 
     assert output["reasoning"] == "A premissa diz que o gato dorme; acordado é o oposto."
     assert output["label"] == "Contradiction"
@@ -86,6 +87,20 @@ def test_execute_reasoning_sends_cot_json_prompt_with_zero_temperature_and_max_t
     assert output["prompt_tokens"] == 120
     assert output["completion_tokens"] == 80
     assert output["latency_ms"] >= 0.0
+
+
+def test_execute_reasoning_parses_fenced_json_without_fallback() -> None:
+    fenced = f"```json\n{_VALID_CONTENT}\n```"
+    requests: list[dict[str, object]] = []
+    client = _client_returning(
+        fenced, requests, usage={"prompt_tokens": 100, "completion_tokens": 40}
+    )
+
+    output = system2.execute_reasoning(_PREMISE, _HYPOTHESIS, client=client)
+
+    assert output["label"] == "Contradiction"
+    assert output["fallback_used"] is False
+    assert output["reasoning"] == "A premissa diz que o gato dorme; acordado é o oposto."
 
 
 def test_execute_reasoning_falls_back_to_regex_when_json_decoding_fails(

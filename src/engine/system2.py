@@ -26,10 +26,17 @@ SYSTEM2_PROMPT_TEMPLATE: Final = (
     "{\n"
     '  "reasoning": "Explicação detalhada...",\n'
     '  "label": "Entailment" | "Contradiction"\n'
-    "}"
+    "}\n\n"
+    "Responda apenas com o JSON, sem blocos de código markdown, e mantenha "
+    "o raciocínio em até duas frases."
 )
 
 _LABEL_PATTERN: Final = re.compile(r"(?i)\b(entailment|contradiction)\b")
+
+# Cerca de markdown (```json ... ```) observada envolvendo o JSON em 12 das
+# 20 respostas do Qwen3-4B-AWQ no Colab (temperatura 0); o json.loads
+# rejeita o texto com cerca, então ela é removida antes do parse.
+_FENCE_PATTERN: Final = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
 
 # Mapa próprio para rótulos vindos do modelo (casefold). O `normalize_label`
 # do loader mapeia os rótulos crus do ASSIN 2 (ENTAILMENT/NONE), que não é o
@@ -70,16 +77,24 @@ def _model_label(raw: object) -> Label | None:
     return _MODEL_LABELS.get(raw.strip().casefold())
 
 
-def _parse_system2_response(content: str) -> tuple[str, Label, bool]:
-    """Parseia a saída CoT+JSON com fallbacks em cadeia: regex → default Contradiction.
+def _strip_markdown_fence(content: str) -> str:
+    """Remove a cerca de markdown; sem cerca, devolve o texto inalterado."""
+    match = _FENCE_PATTERN.match(content)
+    return match.group(1) if match else content
 
-    Retorna (reasoning, label, fallback_used). JSON válido com `reasoning`
-    (str) e `label` reconhecido retorna `fallback_used=False`; qualquer falha
-    cai no regex sobre o texto bruto (edge case da spec) e, sem match, no
-    default `Contradiction` com warning (edge case de output vazio/truncado).
+
+def _parse_system2_response(content: str) -> tuple[str, Label, bool]:
+    """Parseia a saída CoT+JSON com fallbacks em cadeia: JSON → regex → default.
+
+    Retorna (reasoning, label, fallback_used). JSON válido — com ou sem
+    cerca de markdown em volta, que é formatação e não conteúdo — com
+    `reasoning` (str) e `label` reconhecido retorna `fallback_used=False`;
+    qualquer falha cai no regex sobre o texto bruto (edge case da spec) e,
+    sem match, no default `Contradiction` com warning (edge case de output
+    vazio/truncado).
     """
     try:
-        parsed = json.loads(content)
+        parsed = json.loads(_strip_markdown_fence(content))
     except json.JSONDecodeError:
         parsed = None
     if isinstance(parsed, dict):

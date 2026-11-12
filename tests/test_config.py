@@ -33,6 +33,9 @@ def test_preserves_the_frozen_benchmark_contract_seed_42_samples_200_alpha_085_m
     assert config["dataset"]["seed"] == 42
     assert config["dataset"]["frozen_samples"] == 200
     assert config["router"]["alpha"] == 0.85
-    assert config["system1"]["max_tokens"] == 1
     assert config["system2"]["max_tokens"] == 256
     assert config["model"]["id"] == "Qwen/Qwen3-4B-AWQ"
+    # O contrato real do /v1/systemone não tem campo max_tokens (campos
+    # desconhecidos recebem HTTP 400); system1 só congela o endpoint.
+    assert "max_tokens" not in config["system1"]
+    assert config["system1"]["endpoint"] == "/v1/systemone"

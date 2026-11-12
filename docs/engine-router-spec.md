@@ -25,7 +25,7 @@ Configure, launch, and monitor the local `vLLM` inference server on an air-gappe
 
 **Why this priority**: Highest risk reduction — without a stable vLLM server process serving `/v1/systemone`, neither System 1 single-token evaluations nor prefix-cached fast-path execution can take place.
 
-**Independent Test**: Health-check suite executing a request to local port 8000 returning `200 OK`, followed by 5 warmup requests verifying prefix cache hits in vLLM metrics logs (`avg_prompt_throughput` and KV cache reuse > 0%).
+**Independent Test**: Health-check suite executing a request to local port 8000 returning `200 OK`, followed by warmup requests verifying prefix cache reuse through the prefill latency drop of scenario 2 (queries 2–10 >= 70% faster than query 1) — the gate executed in the Colab validation. The vLLM `/metrics` counters (`avg_prompt_throughput`, KV cache reuse) remain an optional diagnostic when Component G extends the notebook.
 
 **Acceptance Scenarios**:
 1. **Given** a GPU T4 environment with PyTorch and vLLM installed, **When** `vLLMServerManager.start_server(model_name="Qwen/Qwen3-4B-AWQ", quantization="awq", enable_prefix_caching=True)` is called, **Then** the server process binds to port 8000 within 90 seconds and allocates <= 90% GPU VRAM for model weights and KV cache.

@@ -19,8 +19,7 @@ serving:
   prefix_caching: true           # --enable-prefix-caching (README › "Running the vLLM Server & Benchmark")
 
 system1:
-  endpoint: /v1/systemone        # fast-path: 1 token + logprobs (README › "The 3 Evaluated Scenarios")
-  max_tokens: 1
+  endpoint: /v1/systemone        # fast-path: decisão tipada; probabilidades por opção, sem max_tokens/logprobs no corpo (README › "The 3 Evaluated Scenarios")
 
 system2:
   endpoint: /v1/chat/completions # slow-path: CoT + JSON (README › "The 3 Evaluated Scenarios")

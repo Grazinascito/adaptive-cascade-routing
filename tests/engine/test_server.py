@@ -5,6 +5,7 @@ e o health-check por respostas no limite da rede (httpx.MockTransport).
 Corresponde à Story 1 de docs/engine-router-spec.md.
 """
 
+import logging
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -13,7 +14,7 @@ from typing import Any
 import httpx
 import pytest
 
-from src.engine import server, system1
+from src.engine import server, serving
 
 
 class _FakePopen:
@@ -76,9 +77,39 @@ def test_start_server_returns_true_without_spawning_when_health_check_already_pa
     spawned: list[_FakePopen] = []
     _spawn_recording(monkeypatch, spawned)
     monkeypatch.setattr(server, "health_check", lambda base_url: True)
+    monkeypatch.setattr(server, "_server_has_model", lambda base_url, model_name: True)
 
-    assert server.start_server(system1.DEFAULT_MODEL) is True
+    assert server.start_server(serving.DEFAULT_MODEL) is True
     assert spawned == []
+
+
+def test_start_server_raises_when_a_healthy_server_serves_a_different_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spawned: list[_FakePopen] = []
+    _spawn_recording(monkeypatch, spawned)
+    monkeypatch.setattr(server, "health_check", lambda base_url: True)
+    monkeypatch.setattr(server, "_server_has_model", lambda base_url, model_name: False)
+
+    with pytest.raises(server.vLLMServerException, match="does not serve"):
+        server.start_server(serving.DEFAULT_MODEL)
+
+    assert spawned == []
+
+
+def test_start_server_reuses_unverified_healthy_server_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    spawned: list[_FakePopen] = []
+    _spawn_recording(monkeypatch, spawned)
+    monkeypatch.setattr(server, "health_check", lambda base_url: True)
+    monkeypatch.setattr(server, "_server_has_model", lambda base_url, model_name: None)
+    caplog.set_level(logging.WARNING)
+
+    assert server.start_server(serving.DEFAULT_MODEL) is True
+    assert spawned == []
+    assert "could not list models" in caplog.text
 
 
 def test_start_server_launches_api_server_with_expected_flags_and_polls_until_healthy(
@@ -94,7 +125,7 @@ def test_start_server_launches_api_server_with_expected_flags_and_polls_until_he
 
     monkeypatch.setattr(server, "health_check", healthy_on_second_poll)
 
-    assert server.start_server(system1.DEFAULT_MODEL) is True
+    assert server.start_server(serving.DEFAULT_MODEL) is True
 
     assert health_calls["count"] == 2
     assert spawned[0].command == [
@@ -102,7 +133,7 @@ def test_start_server_launches_api_server_with_expected_flags_and_polls_until_he
         "-m",
         "vllm.entrypoints.openai.api_server",
         "--model",
-        system1.DEFAULT_MODEL,
+        serving.DEFAULT_MODEL,
         "--host",
         "127.0.0.1",
         "--port",
@@ -126,7 +157,7 @@ def test_start_server_raises_vllmserverexception_with_restart_instructions_when_
     monkeypatch.setattr(server, "health_check", lambda base_url: False)
 
     with pytest.raises(server.vLLMServerException, match="vllm.entrypoints.openai.api_server"):
-        server.start_server(system1.DEFAULT_MODEL, startup_timeout_s=0.0)
+        server.start_server(serving.DEFAULT_MODEL, startup_timeout_s=0.0)
 
 
 def test_start_server_raises_vllmserverexception_when_process_exits_during_startup(
@@ -139,7 +170,7 @@ def test_start_server_raises_vllmserverexception_when_process_exits_during_start
     monkeypatch.setattr(server, "health_check", lambda base_url: False)
 
     with pytest.raises(server.vLLMServerException, match="vllm_server.log"):
-        server.start_server(system1.DEFAULT_MODEL)
+        server.start_server(serving.DEFAULT_MODEL)
 
 
 def test_health_check_returns_true_on_200_and_false_on_connection_error(
@@ -171,7 +202,7 @@ def test_stop_server_terminates_only_a_process_we_started(
 
     monkeypatch.setattr(server, "health_check", healthy_on_second_poll)
 
-    assert server.start_server(system1.DEFAULT_MODEL) is True
+    assert server.start_server(serving.DEFAULT_MODEL) is True
 
     server.stop_server()
     server.stop_server()
@@ -180,9 +211,26 @@ def test_stop_server_terminates_only_a_process_we_started(
     assert spawned[0].wait_calls == 1
 
 
+def test_server_has_model_reads_the_models_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def listing(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"id": serving.DEFAULT_MODEL}]})
+
+    monkeypatch.setattr(server.httpx, "get", _get_through_transport(listing))
+    assert server._server_has_model("http://127.0.0.1:8000", serving.DEFAULT_MODEL) is True
+    assert server._server_has_model("http://127.0.0.1:8000", "other/model") is False
+
+    def refused(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(server.httpx, "get", _get_through_transport(refused))
+    assert server._server_has_model("http://127.0.0.1:8000", serving.DEFAULT_MODEL) is None
+
+
 def test_read_vram_usage_returns_none_when_nvidia_smi_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _without_nvidia_smi(monkeypatch)
 
-    assert server._read_vram_usage_gb() is None
+    assert server._read_vram_usage_raw() is None

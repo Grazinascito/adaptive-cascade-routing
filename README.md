@@ -1,6 +1,9 @@
 # Adaptive Cascade Routing for Typed LLM Inference: System 1 (Logprobs) vs System 2 (CoT)
 
 [![CI](https://github.com/Grazinascito/adaptive-cascade-routing/actions/workflows/ci.yml/badge.svg)](https://github.com/Grazinascito/adaptive-cascade-routing/actions/workflows/ci.yml)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Grazinascito/adaptive-cascade-routing/blob/main/notebook/adaptive_cascade_benchmark.ipynb)
+[![Dataset](https://img.shields.io/badge/🤗_Dataset-assin2-FFD21F)](https://huggingface.co/datasets/nilc-nlp/assin2)
+[![Model](https://img.shields.io/badge/🤗_Model-Qwen3--4B--AWQ-FFD21F)](https://huggingface.co/Qwen/Qwen3-4B-AWQ)
 
 Empirical inference engineering benchmark evaluating latency, token cost, and accuracy trade-offs across three execution scenarios for Brazilian Portuguese (PT-BR) Natural Language Inference (NLI): **System 1 Pure**, **System 2 Pure**, and **Adaptive Cascade Routing**.
 
@@ -14,15 +17,15 @@ Inspired by iFood's engineering architecture (**Sugar, Revisor & Pepper**) and g
 
 The benchmark executes an apples-to-apples comparison across a frozen 200-sample test set from the ASSIN 2 dataset (nilc-nlp/assin2):
 
-1. **System 1 Pure (Fast-Path / Typed Decision)**: Evaluates input states via vLLM's specialized /v1/systemone endpoint with prefix caching enabled. Inspects token log-probabilities (logprobs) to emit exactly 1 token (max_tokens=1), eliminating autoregressive decoding latency (~40-60ms p95).
+1. **System 1 Pure (Fast-Path / Typed Decision)**: Evaluates input states via vLLM's specialized /v1/systemone endpoint (Structured Decisions API) with prefix caching enabled. Declares a `choice` question whose options map to one-token labels; the server answers with per-option probabilities (server-side softmax), eliminating autoregressive decoding latency (~40-60ms p95).
 2. **System 2 Pure (Slow-Path / Autoregressive CoT)**: Routes queries through /v1/chat/completions, enforcing Chain-of-Thought (CoT) reasoning and strict JSON schema output (max_tokens=256), serving as the baseline for maximum reasoning accuracy.
 3. **Adaptive Cascade (Entropy/Confidence Router)**: Calculates top-choice probability $P_{\text{top}}$ and Shannon Entropy $H(P)$ over logprobs. Accepts System 1 predictions when $P_{\text{top}} \geq \alpha$ ($\alpha \approx 0.85$); escalates to System 2 only when statistical uncertainty is high.
 
 ## System Architecture
 
 - **Dataset Layer**: Frozen 200-sample test set from ASSIN 2 (seed=42).
-- **Serving Engine Layer**: Single local vLLM server with --enable-prefix-caching.
-- **System 1 Engine**: Fast-path evaluation via /v1/systemone generating 1 token.
+- **Serving Engine Layer**: Single local vLLM server with --enable-prefix-caching and --logprobs-mode raw_logprobs.
+- **System 1 Engine**: Fast-path evaluation via /v1/systemone choice questions (per-option probabilities).
 - **Router Layer**: Evaluates top probability $P_{\text{top}}$ vs threshold $\alpha$.
 - **System 2 Engine**: Fallback execution via /v1/chat/completions autoregression producing Chain-of-Thought reasoning and strict JSON outputs.
 - **Metrics Harness**: Captures p50, p95, p99 latencies, token consumption, and APGR accuracy.
@@ -91,7 +94,7 @@ adaptive-cascade-routing/
 │   ├── engine/
 │   │   ├── __init__.py
 │   │   ├── server.py                # vLLM server lifecycle (vLLMServerManager)
-│   │   ├── system1.py               # Interface with /v1/systemone (logprobs extraction)
+│   │   ├── system1.py               # Interface with /v1/systemone (choice questions; per-option probabilities)
 │   │   ├── system2.py               # Interface with /v1/chat/completions (CoT + JSON)
 │   │   └── router.py                # Softmax, Shannon entropy, and RouteLLM cascade logic
 │   └── metrics/
@@ -134,15 +137,19 @@ Dependencies are managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml`
 pip install -r requirements-colab.txt
 ```
 
+On Google Colab (GPU NVIDIA T4), open [notebook/adaptive_cascade_benchmark.ipynb](notebook/adaptive_cascade_benchmark.ipynb) — its Setup cell clones this repo and installs the dependencies above; the remaining cells validate Components B (server + prefix cache), C (System 1 typed decisions) and F (System 2 CoT+JSON).
+
 ### Running the vLLM Server & Benchmark
 
-1. **Start the local vLLM server** (with prefix caching enabled):
+1. **Start the local vLLM server** (with prefix caching enabled; `--logprobs-mode raw_logprobs` is required by the `/v1/systemone` Structured Decisions API):
 
 ```bash
 python -m vllm.entrypoints.openai.api_server \
-    --model Qwen/Qwen2.5-7B-Instruct-AWQ \
+    --model Qwen/Qwen3-4B-AWQ \
     --quantization awq \
     --enable-prefix-caching \
+    --gpu-memory-utilization 0.90 \
+    --logprobs-mode raw_logprobs \
     --port 8000
 ```
 

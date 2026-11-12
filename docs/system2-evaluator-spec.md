@@ -24,7 +24,7 @@ Implement the slow-path fallback module (`System2Engine`) that accepts ambiguous
 **Independent Test**: Execute 20 sample NLI pairs through `execute_reasoning()`. Pass threshold: >= 95% valid JSON outputs parsed without fallback regex, with correct label schema.
 
 **Acceptance Scenarios**:
-1. **Given** a premise and hypothesis flagged with high entropy by the router, **When** `execute_reasoning(premise, hypothesis)` is called via `/v1/chat/completions`, **Then** the engine returns a `System2Output` dataclass containing `reasoning`, `label`, `tokens_used`, and `latency_ms`.
+1. **Given** a premise and hypothesis flagged with high entropy by the router, **When** `execute_reasoning(premise, hypothesis)` is called via `/v1/chat/completions`, **Then** the engine returns a `System2Output` TypedDict containing `reasoning`, `label`, `prompt_tokens` + `completion_tokens`, `latency_ms`, and `fallback_used` (field list per Key Entities below).
 2. **Given** a non-compliant JSON response from the LLM, **When** JSON decoding fails, **Then** the system gracefully falls back to regex label extraction (`Contradiction` or `Entailment`) and logs a warning without crashing.
 
 ---
@@ -66,7 +66,7 @@ Sweep the confidence threshold alpha in [0.0, 1.0] across the benchmark results 
 
 ### Functional Requirements
 
-- **FR-001**: System2Engine (Component F §5.6) MUST construct system and user prompts requiring step-by-step Chain-of-Thought reasoning prior to returning the final classification.
+- **FR-001**: System2Engine (Component F §5.6) MUST construct the prompt from fixed system-level CoT instructions plus the user prompt (premise/hypothesis pair), requiring step-by-step Chain-of-Thought reasoning prior to the final classification. Both parts travel in a single `user` message — the chat contract validated in the Colab gate (>= 95% valid JSON on the 20-pair run); splitting them into separate `system`/`user` messages is a post-merge prefix-caching optimization candidate.
 - **FR-002**: System2Engine (Component F §5.6) MUST enforce strict JSON formatting (reasoning and label: Entailment or Contradiction).
 - **FR-003**: BenchmarkHarness (Component G §5.7) MUST execute all 3 scenarios (System 1 Pure, System 2 Pure, Adaptive Cascade) on the exact same frozen 200-sample test set to ensure unbiased comparisons.
 - **FR-004**: BenchmarkHarness (Component G §5.7) MUST measure latency per request using high-precision timers (`time.perf_counter`).

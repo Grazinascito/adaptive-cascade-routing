@@ -11,7 +11,7 @@
 
 O **Adaptive Cascade Routing System** é um sistema de engenharia de inferência projetado para avaliar empiricamente a redução de latência e de custo financeiro no processamento de decisões semânticas em 3 cenários: **System 1 puro**, **System 2 puro** e **Cascata Adaptativa**. Inspirado na arquitetura de catálogo em grande escala do iFood (*Sugar, Revisor & Pepper*) e fundamentado na teoria de roteamento estatístico de modelos (*RouteLLM* / LMSYS / UC Berkeley), o sistema implementa um roteamento adaptativo entre duas estratégias de inferência executadas sobre a mesma infraestrutura de servidor em Português do Brasil (PT-BR):
 
-1. **System 1 (Fast-Path / Decisão Tipada)**: Utiliza a rota especializada `/v1/systemone` da engine `vLLM` com `--enable-prefix-caching`, avaliando a distribuição de probabilidades de tokens (*logprobs*) e gerando exatamente 1 token de resposta (`max_tokens=1`). Essa abordagem elimina a fase autorregressiva de *decode*, alcançando latências da ordem de dezenas de milissegundos.
+1. **System 1 (Fast-Path / Decisão Tipada)**: Utiliza a rota especializada `/v1/systemone` da engine `vLLM` com `--enable-prefix-caching`: declara uma pergunta `choice` cujos rótulos internos têm 1 token, e o servidor devolve as probabilidades por opção (softmax server-side) sem expor decodificação autorregressiva. Essa abordagem elimina a fase autorregressiva de *decode*, alcançando latências da ordem de dezenas de milissegundos.
 2. **System 2 (Slow-Path / Raciocínio Autorregressivo)**: Atua como mecanismo de *fallback* para requisições com alta incerteza estatística (alta entropia nos *logprobs* do System 1), utilizando o endpoint `/v1/chat/completions` para produzir raciocínio passo a passo (*Chain-of-Thought* - CoT) e saída estruturada em JSON.
 
 O sistema demonstra como a triagem de requisições por incerteza estatística permite recuperar mais de 95% da acurácia do modelo completo, enquanto reduz a latência p95 em mais de 50% e diminui o consumo total de tokens em mais de 60%, validando o princípio operacional do iFood de que *Tokens são dinheiro*.
@@ -36,7 +36,7 @@ Este projeto estende essa filosofia ao construir um benchmark reprodutível em a
 
 - **RF-1.** O pipeline DEVE carregar o dataset **ASSIN 2** (`nilc-nlp/assin2`) e normalizar os pares de frases (Premissa e Hipótese) para uma tarefa de inferência textual binária (`Entailment` vs `Contradiction`).
 - **RF-2.** O servidor `vLLM` DEVE ser inicializado com a flag `--enable-prefix-caching` para reutilizar o estado do *prefill* entre requisições com prompts de instrução idênticos.
-- **RF-3.** O motor System 1 DEVE disparar requisições ao endpoint `/v1/systemone` solicitando `max_tokens=1` e `logprobs=True`, extraindo as distribuições de probabilidade dos tokens candidatos.
+- **RF-3.** O motor System 1 DEVE disparar requisições ao endpoint `/v1/systemone` declarando uma pergunta `choice` com os rótulos candidatos no `criteria`; a resposta devolve as probabilidades por opção (softmax do servidor sobre rótulos de 1 token), que o motor converte em logprobs $\ln(P)$.
 - **RF-4.** O módulo de avaliação estatística DEVE calcular a probabilidade da resposta de topo $P_{\text{top}}$ e a entropia de Shannon $H(P)$ sobre os rótulos permitidos.
 - **RF-5.** O roteador adaptativo DEVE tomar a decisão de roteamento baseada em um limiar configurável $\alpha$: aceitar a resposta do System 1 se $P_{\text{top}} \ge \alpha$, ou rotear para o System 2 se $P_{\text{top}} < \alpha$.
 - **RF-6.** O motor System 2 DEVE processar os casos desviados gerando raciocínio *Chain-of-Thought* (CoT) e JSON validado com o rótulo final.
@@ -77,7 +77,7 @@ O sistema opera dentro do ambiente Linux/CUDA da GPU NVIDIA T4 no Google Colab, 
 
 - **Dataset Loader & Formatter**: Consome o dataset ASSIN 2 do Hugging Face Hub e constrói o prompt tipado para o vLLM.
 - **vLLM Serving Engine**: Servidor local de inferência em GPU T4 que carrega o modelo quantizado AWQ e disponibiliza os endpoints `/v1/systemone` e `/v1/chat/completions`.
-- **System 1 Engine**: Módulo que faz chamadas de 1 token ao `/v1/systemone`, extraindo os *logprobs* dos rótulos válidos.
+- **System 1 Engine**: Módulo que faz perguntas `choice` ao `/v1/systemone`, consumindo as probabilidades por opção devolvidas pelo servidor.
 - **Confidence & Entropy Evaluator**: Componente matemático que calcula a probabilidade normalizada e a entropia dos logits.
 - **Cascade Router**: Roteador estatístico que decide a transferência de execução para o System 2.
 - **System 2 Engine**: Módulo autorregressivo de *fallback* para raciocínio estruturado (CoT + JSON Schema).
@@ -87,7 +87,7 @@ O sistema opera dentro do ambiente Linux/CUDA da GPU NVIDIA T4 no Google Colab, 
 
 - **`DatasetLoader`** → Carrega, filtra e formata o dataset ASSIN 2 em pares de entrada estruturados.
 - **`vLLMServerManager`** → Gerencia o ciclo de vida e a inicialização do processo servidor `vLLM` em background.
-- **`System1Engine`** → Executa chamadas tipadas no endpoint `/v1/systemone` com `max_tokens=1`.
+- **`System1Engine`** → Executa chamadas tipadas no endpoint `/v1/systemone` (pergunta `choice`; probabilidades por opção).
 - **`EntropyEvaluator`** → Processa o dicionário de *logprobs* e retorna a distribuição de probabilidade normalizada e a entropia de Shannon.
 - **`CascadeRouter`** → Compara a confiança estimada com o limiar $\alpha$ e decide a rota.
 - **`System2Engine`** → Invoca o endpoint `/v1/chat/completions` com prompts de *Chain-of-Thought*.
@@ -160,36 +160,32 @@ adaptive-cascade-routing/
 
 - **Scope & Responsibility**: Subir e monitorar o processo de background do servidor `vLLM` na GPU T4 do Colab.
 - **Interfaces & Contracts**:
-  - `start_server(model_name: str, host: str = "127.0.0.1", port: int = 8000) -> bool`
-  - `health_check() -> bool`
+  - `start_server(model_name: str, *, host: str = "127.0.0.1", port: int = 8000, quantization: str = "awq", enable_prefix_caching: bool = True, gpu_memory_utilization: float = 0.90, logprobs_mode: str = "raw_logprobs", startup_timeout_s: float = 90.0) -> bool`
+  - `health_check(base_url: str = "http://127.0.0.1:8000", *, timeout_s: float = 5.0) -> bool`
+  - `stop_server() -> None`; exceção `vLLMServerException` para crash/OOM/timeout de startup (com instruções de restart e leitura de VRAM)
 - **Dependencies**: Executável `vllm.entrypoints.openai.api_server`, CUDA 12.x, PyTorch.
 - **Core Logic**:
-  1. Dispara a linha de comando do servidor com argumentos de otimização (`--model Qwen/Qwen2.5-7B-Instruct-AWQ --quantization awq --enable-prefix-caching`).
-  2. Executa retentativas em loop contra o endpoint do vLLM até receber resposta HTTP 200.
+  1. Dispara a linha de comando do servidor com argumentos de otimização (`--model Qwen/Qwen3-4B-AWQ --quantization awq --enable-prefix-caching --gpu-memory-utilization 0.90 --logprobs-mode raw_logprobs`); reusa um servidor já saudável sem lançar novo processo.
+  2. Executa polling do endpoint de health do vLLM até receber resposta HTTP 200 dentro do timeout de startup.
 
 ### 5.3 Component C: System 1 Typed Decision Engine (`system1.py`)
 
-- **Scope & Responsibility**: Realizar a chamada de baixíssima latência ao endpoint especializado `/v1/systemone` do vLLM e extrair o dicionário de probabilidades dos tokens de resposta.
+- **Scope & Responsibility**: Realizar a chamada de baixíssima latência ao endpoint especializado `/v1/systemone` do vLLM (Structured Decisions API) e derivar as métricas de decisão das probabilidades por opção.
 - **Interfaces & Contracts**:
-  - `evaluate_typed_decision(state: str, question: str, choices: List[str]) -> System1Output`
-- **Data Models**:
+  - `evaluate_typed_decision(state: str, choices: Sequence[Label], *, model: str = DEFAULT_MODEL, base_url: str = "http://127.0.0.1:8000/v1", instructions: str = SYSTEM1_SYSTEM_PREFIX, timeout_s: float = 10.0, client: httpx.Client | None = None) -> System1Output`
+- **Data Models** (TypedDict, no padrão do repo):
   ```python
-  from dataclasses import dataclass
-  from typing import Dict
-
-
-  @dataclass
-  class System1Output:
-      top_choice: str
+  class System1Output(TypedDict):
+      top_choice: Label
       top_probability: float
-      logprobs: Dict[str, float]
-      probabilities: Dict[str, float]
+      logprobs: dict[str, float]
+      probabilities: dict[Label, float]
       entropy: float
       latency_ms: float
   ```
 - **Core Logic**:
-  1. Envia a requisição HTTP POST para o endpoint `/v1/systemone` configurando `max_tokens=1` e especificando a lista de `choices=["Entailment", "Contradiction"]`.
-  2. Extrai os log-probabilities $\ln(P)$ retornados pelo motor vLLM no primeiro token gerado.
+  1. Envia a requisição HTTP POST para o endpoint `/v1/systemone` com o corpo declarando uma pergunta `choice` (`criteria` = `{"Entailment": null, "Contradiction": null}`), o par NLI no `state` e o prompt fixo no `instructions` de topo (idêntico em toda query, para o prefix caching). Campos desconhecidos no corpo recebem HTTP 400 — `max_tokens`/`logprobs`/`choices` não existem nesta API.
+  2. Converte as `probabilities` por opção da resposta em logprobs $\ln(P)$ (opção ausente ou com probabilidade 0 fica de fora e recebe `LOGPROB_FLOOR` via `compute_metrics`) e monta o `System1Output` com as métricas do Componente D.
 
 ### 5.4 Component D: Confidence & Entropy Evaluator (`router.py`)
 
@@ -217,7 +213,9 @@ adaptive-cascade-routing/
 
 - **Scope & Responsibility**: Processar casos limítrofes e ambíguos gerando raciocínio em múltiplos tokens e JSON estruturado.
 - **Interfaces & Contracts**:
-  - `execute_reasoning(premise: str, hypothesis: str) -> System2Output`
+  - `execute_reasoning(premise: str, hypothesis: str, *, model: str = DEFAULT_MODEL, base_url: str = "http://127.0.0.1:8000/v1", max_tokens: int = 256, temperature: float = 0.0, timeout_s: float = 120.0, client: httpx.Client | None = None) -> System2Output`
+  - `System2Output` (TypedDict): `reasoning`, `label`, `prompt_tokens`, `completion_tokens`, `latency_ms`, `fallback_used`
+  - O payload inclui `chat_template_kwargs: {"enable_thinking": false}` — modelos Qwen3 "originais" pensam por padrão e os blocos `<think>` quebrariam o parse do JSON
 - **Prompt Architecture**:
   ```text
   Analise o par de frases abaixo e forneça o raciocínio passo a passo (Chain-of-Thought) antes de determinar o rótulo final.
@@ -231,7 +229,7 @@ adaptive-cascade-routing/
     "label": "Entailment" | "Contradiction"
   }
   ```
-- **Error Handling**: Se a resposta não cumprir o schema JSON esperado, faz a extração de rótulo via regex como plano de contingência (*degradation*).
+- **Error Handling**: Se a resposta não cumprir o schema JSON esperado, faz a extração de rótulo via regex como plano de contingência (*degradation*), marcando `fallback_used=True`; output vazio ou sem rótulo reconhecido retorna o default `Contradiction` com `fallback_used=True` e warning no log.
 
 ### 5.7 Component G: Benchmark & Performance Evaluation Harness (`evaluator.py`)
 
@@ -256,7 +254,7 @@ adaptive-cascade-routing/
 ## 7. Performance & Scalability
 
 - **Prefix Caching Optimization**: Ao prefixar as requisições com a instrução do sistema e os rótulos válidos, a flag `--enable-prefix-caching` do vLLM permite reutilizar os tensores de KV Cache no espaço da GPU, reduzindo o tempo de *prefill* para requisições subsequentes a aproximadamente 5-10ms.
-- **Gerenciamento de Memória VRAM**: Utilização de quantização AWQ em 4-bits, limitando a ocupação de VRAM do modelo de 7B a aproximadamente 5.5 GB em uma GPU T4 de 16 GB, reservando o espaço restante para alocação dinâmica do KV Cache.
+- **Gerenciamento de Memória VRAM**: Utilização de quantização AWQ em 4-bits, limitando a ocupação de VRAM do modelo de 4B a aproximadamente 2.7 GB em uma GPU T4 de 16 GB (a troca do 7B original pelo Qwen3-4B-AWQ veio do requisito de read strategy do `/v1/systemone`; ver Assumptions do engine-router-spec), reservando o espaço restante para alocação dinâmica do KV Cache.
 
 ---
 
@@ -288,7 +286,7 @@ adaptive-cascade-routing/
 
 ### Riscos e Mitigações
 - **Risco 1: Limite de VRAM no Colab (16GB)**.  
-  *Mitigação*: Utilizar modelos quantizados AWQ de 7B ou 9B com `--gpu-memory-utilization 0.90`.
+  *Mitigação*: Utilizar modelos quantizados AWQ da família Qwen3 (4B–8B) com `--gpu-memory-utilization 0.90`.
 - **Risco 2: Oscilação de latência em ambiente compartilhado no Colab**.  
   *Mitigação*: Ignorar as primeiras 5 requisições de *warmup* e reportar percentis estatísticos ($p50, p95, p99$) agregados em 200 iterações.
 

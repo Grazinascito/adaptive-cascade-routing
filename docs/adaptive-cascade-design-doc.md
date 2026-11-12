@@ -51,7 +51,7 @@ Este projeto estende essa filosofia ao construir um benchmark reprodutível em a
 - **Reprodutibilidade**
   - **RNF-03.** Todo o pipeline de inferência e benchmark DEVE ser executável em uma instância gratuita do Google Colab com GPU NVIDIA T4 (16GB VRAM) sem requerer APIs pagas externas. *(Por quê: garantia de acesso e validação pública no GitHub.)* *(Teste: execução autônoma do notebook Colab do início ao fim.)*
 - **Observabilidade**
-  - **RNF-04.** O sistema DEVE gerar registros estruturados por requisição contendo `query_id`, `system_1_latency`, `system_1_confidence`, `system_1_entropy`, `routed_to_system_2`, `system_2_latency`, `total_latency` e `final_prediction`. *(Por quê: permitir análise posterior de dispersão e calibragem de limiar.)*
+  - **RNF-04.** O sistema DEVE gerar registros estruturados por requisição (`BenchmarkResult`, Componente G) contendo `query_id`, `system_1_latency_ms`, `confidence`, `entropy`, `routed_to_system_2`, `system_2_latency_ms`, `total_latency_ms`, `prediction`, `ground_truth`, `is_correct`, tokens de prefill/decode e flags de fallback do parser/erro HTTP. *(Por quê: permitir análise posterior de dispersão e calibragem de limiar.)*
 
 ### 3.2 Non-Goals
 
@@ -128,7 +128,8 @@ adaptive-cascade-routing/
 │   │   └── router.py              # Lógica do Roteador de Cascata e cálculo de entropia
 │   └── metrics/
 │       ├── __init__.py
-│       └── evaluator.py           # Coleta de latência (p50/p95/p99), tokens e acurácia
+│       ├── summary.py             # BenchmarkResult/SummaryReport e métricas puras (percentis, F1, APGR)
+│       └── evaluator.py           # BenchmarkHarness, sweep de α, artefatos de results/ e CLI
 ├── notebook/
 │   └── adaptive_cascade_benchmark.ipynb # Google Colab Notebook executável ponta a ponta (Marco 1)
 ├── results/
@@ -233,13 +234,14 @@ adaptive-cascade-routing/
 
 ### 5.7 Component G: Benchmark & Performance Evaluation Harness (`evaluator.py`)
 
-- **Scope & Responsibility**: Medir o desempenho de tempo e custo de forma rigorosa em todas as amostras do benchmark.
+- **Scope & Responsibility**: Medir o desempenho de tempo e custo de forma rigorosa em todas as amostras do benchmark. Tipos e métricas puras vivem em `summary.py`; a orquestração (3 cenários, sweep de α, artefatos, CLI) em `evaluator.py`.
 - **Metrics Calculated**:
-  - **Latência**: $p50$, $p95$, $p99$ medidos via `time.perf_counter()` em milissegundos.
-  - **Tokens**: Total de tokens de prefill e de decode (obtidos das métricas de uso da API do vLLM).
-  - **Acurácia & F1-Score**: Comparação com os rótulos de *ground truth* do ASSIN 2.
+  - **Latência**: $p50$, $p95$, $p99$ medidos via `time.perf_counter()` em milissegundos. As 5 primeiras requisições de cada cenário são descartadas dos percentis (*warmup*; §10, risco 2) — acurácia, tokens e taxas usam todas as requisições.
+  - **Tokens**: Total de tokens de prefill e de decode (obtidos do `usage` do `/v1/chat/completions`). O `/v1/systemone` não devolve `usage`, então requisições atendidas só pelo System 1 registram 0 — o KPI de decode tokens compara apenas chamadas do System 2.
+  - **Acurácia & F1-Score**: Comparação com os rótulos de *ground truth* do ASSIN 2 (F1 macro sobre as duas classes).
   - **Average Performance Gap Recovered (APGR)**:
     $$\text{APGR}(\alpha) = \frac{\text{Accuracy}(\text{Cascade}_\alpha) - \text{Accuracy}(\text{System 1})}{\text{Accuracy}(\text{System 2}) - \text{Accuracy}(\text{System 1})}$$
+    Denominador zero (acurácias de S1 e S2 iguais) devolve 0.0, sem divisão por zero.
 
 ---
 

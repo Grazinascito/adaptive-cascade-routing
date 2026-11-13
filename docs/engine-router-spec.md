@@ -96,7 +96,7 @@ Implement `route(query, confidence, alpha, system2)` in `router.py`, following B
 - **FR-004**: System MUST compute Shannon Entropy $\text{Entropy}(P) = -\sum_{k=1}^K P(y_k \mid x) \log_2 P(y_k \mid x)$ and Top Confidence $\text{Confidence}(x) = \max_k P(y_k \mid x)$ for every query (Component D §5.4).
 - **FR-005**: System MUST implement the RouteLLM decision function $R_\alpha(q)$ (Component E §5.5):
   $$R_\alpha(q) = \begin{cases} \text{System 1 (Fast-Path)}, & \text{if } \text{Confidence}(q) \ge \alpha \\ \text{System 2 (Slow-Path)}, & \text{if } \text{Confidence}(q) < \alpha \end{cases}$$
-- **FR-006**: System MUST return a structured result object `CascadeResult` for every request, logging `query_id`, `system_1_latency_ms`, `confidence`, `entropy`, `routed_to_system_2`, `system_2_latency_ms`, `total_latency_ms`, `final_prediction`, and `ground_truth`.
+- **FR-006**: System MUST return a structured record for every request — `BenchmarkResult` (Component G, `src/metrics/summary.py`), composed by the benchmark harness from `RouteOutcome` plus the engine outputs — logging `query_id`, `system_1_latency_ms`, `confidence`, `entropy`, `routed_to_system_2`, `system_2_latency_ms`, `total_latency_ms`, `prediction`, and `ground_truth` (plus prefill/decode tokens and the parser/error fallback flags; canonical field list in the system2-evaluator spec Key Entities).
 
 ### Non-Functional Requirements *(AI-critical)*
 
@@ -111,14 +111,14 @@ Implement `route(query, confidence, alpha, system2)` in `router.py`, following B
 - **`System2Output`**: TypedDict holding Chain-of-Thought reasoning string, extracted label, prompt/completion token counts, latency in ms, and the `fallback_used` flag (canonical field list in `system2-evaluator-spec` Key Entities).
 - **`DecisionMetrics`**: TypedDict returned by `compute_metrics` holding `top_choice`, top `confidence`, Shannon `entropy` in bits, and the normalized `probabilities` dict.
 - **`RouteOutcome`**: TypedDict returned by `route` holding the `route` decision (`"SYSTEM_1"` or `"SYSTEM_2"`), the `routed_to_system_2` flag, and the `system2_prediction` (`None` on the fast-path).
-- **`CascadeResult`**: Unified record of a single benchmark item execution containing all System 1 metrics, routing flags, System 2 metrics (if invoked), and final decision vs ground truth.
+- **`BenchmarkResult`** (was specified as `CascadeResult`): Unified record of a single benchmark item execution containing all System 1 metrics, routing flags, System 2 metrics (if invoked), and final decision vs ground truth. Implemented in Component G (`src/metrics/summary.py`); the router itself returns `RouteOutcome` and the harness composes the unified record.
 
 ---
 
 ## Success Criteria *(mandatory)*
 
 - **SC-001 (System 1 Speed)**: System 1 Fast-Path achieves $p95 \le 60\text{ms}$ latency across the 200-sample test set.
-- **SC-002 (Cascade Latency Reduction)**: Adaptive Cascade (at calibrated $lpha = 0.85$) reduces total $p95$ latency by $\ge 50\%$ compared to System 2 Standalone.
+- **SC-002 (Cascade Latency Reduction)**: Adaptive Cascade (at calibrated $\alpha = 0.85$) reduces total $p95$ latency by $\ge 50\%$ compared to System 2 Standalone.
 - **SC-003 (Accuracy Recovery - APGR)**: Adaptive Cascade recovers $\ge 95\%$ of System 2 standalone accuracy ($\text{APGR} \ge 0.95$) on the frozen 200-sample ASSIN 2 test set.
 - **SC-004 (Decode Token Reduction)**: Adaptive Cascade reduces total generated decode tokens by $\ge 60\%$ compared to System 2 Standalone.
 

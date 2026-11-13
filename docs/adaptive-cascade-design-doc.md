@@ -275,8 +275,13 @@ adaptive-cascade-routing/
 
 1. **Marco 1 — Validação no Colab**: Execução do pipeline completo no Google Colab com medição inicial de latência e acurácia.
 2. **Marco 2 — Modularização e Repositório GitHub**: Organização da estrutura de código em módulos Python limpos, inclusão de testes unitários e criação de um `README.md` com os diagramas e tabelas de resultados.
-3. **Marco 3 — Hugging Face Space (Gradio)**: Publicação de um Space interativo permitindo a comparação em tempo real de latência entre System 1 e System 2.
-4. **Marco 4 — Artigo Técnico no LinkedIn**: Publicação do estudo de caso articulando a redução de latência no p95 em +50% e a economia de tokens de +60%, fundamentado nas referências do iFood e do RouteLLM.
+3. **Marco 3 — Ciclo de Agentes de Auditoria** (inspirado no ciclo Sugar → Revisor → Pepper do iFood; *roadmap* documentado, ainda não iniciado): estender a cascata medida no Marco 1 com as etapas *auditar* e *aprender*, um PR por task com spec própria:
+   - **`005-judge-audit` — Componente H (§5.8, futuro)**: juiz LLM (*LLM-as-a-Judge*, análogo de laboratório do Revisor). Spec a criar em `docs/judge-spec.md`. Audita uma amostra (taxa no config) dos registros de `results/raw_benchmark_data.json` — reuso que dispensa re-rodar o benchmark — verificando a predição da cascata contra premissa/hipótese; discordâncias disparam uma tentativa de reclassificação com o feedback do juiz no prompt. Métrica: taxa de concordância e efeito da reclassificação.
+   - **`006-insights-loop` — Componente I (§5.9, futuro)**: memória operacional (a etapa *aprender*). Discordâncias do juiz viram insights estruturados (`results/insights.json`); os principais insights são injetados no prompt do System 2 e o delta de acurácia com/sem é medido no mesmo conjunto congelado. É o que fecha o ciclo: classificar → auditar → aprender → melhorar.
+   - **`007-hitl-review` (opcional)**: casos não resolvidos (juiz discorda e a reclassificação falha) exportados em CSV de revisão humana; correções reinjetadas como insights.
+   - **Fora de escopo deliberado — análogo do Pepper**: o Pepper existe porque o catálogo do iFood não tem ground truth; o ASSIN 2 tem. A mineração do subconjunto onde a cascata erra — que seria o equivalente útil — já é coberta pelo loop de insights do Componente I.
+4. **Marco 4 — Hugging Face Space (Gradio)**: Publicação de um Space interativo permitindo a comparação em tempo real de latência entre System 1 e System 2.
+5. **Marco 5 — Artigo Técnico no LinkedIn**: Publicação do estudo de caso articulando a redução de latência no p95 em +50% e a economia de tokens de +60%, fundamentado nas referências do iFood e do RouteLLM.
 
 ---
 

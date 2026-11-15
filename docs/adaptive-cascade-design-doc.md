@@ -16,6 +16,8 @@ O **Adaptive Cascade Routing System** é um sistema de engenharia de inferência
 
 O sistema demonstra como a triagem de requisições por incerteza estatística permite recuperar mais de 95% da acurácia do modelo completo, enquanto reduz a latência p95 em mais de 50% e diminui o consumo total de tokens em mais de 60%, validando o princípio operacional do iFood de que *Tokens são dinheiro*.
 
+> **Registro de pivot (2026-11-14)**: a tese do projeto (os ganhos da arquitetura híbrida do iFood também aparecem no eixo System 1 × System 2 do mesmo modelo) exige dataset com cauda ambígua — o tipo de conteúdo que o blog do iFood descreve. O ASSIN 2 não tem esse conteúdo; a medição do Marco 1 provou (S1 puro 0,920 > S2 puro 0,865, cascata com 99,5% do tráfego no caminho barato). Decisão: trocar o dataset pela classificação de itens de catálogo em códigos **NCM** (taxonomia fiscal brasileira em árvore; branch `005-dataset-pivot-ncm`, spec em `docs/dataset-pivot-ncm-spec.md`). O ASSIN 2 sai da linha principal do relatório; a medição do Marco 1 permanece no histórico do git (commit `79a8654`). Até o merge dessa branch, as seções deste documento que citam o ASSIN 2 (RF-1, §2, §5.1, §5.3, §5.6) descrevem o estado implementado do Marco 1 e serão reescritas pela task do pivot.
+
 ---
 
 ## 2. Contexto
@@ -275,13 +277,14 @@ adaptive-cascade-routing/
 
 1. **Marco 1 — Validação no Colab**: Execução do pipeline completo no Google Colab com medição inicial de latência e acurácia.
 2. **Marco 2 — Modularização e Repositório GitHub**: Organização da estrutura de código em módulos Python limpos, inclusão de testes unitários e criação de um `README.md` com os diagramas e tabelas de resultados.
-3. **Marco 3 — Ciclo de Agentes de Auditoria** (inspirado no ciclo Sugar → Revisor → Pepper do iFood; *roadmap* documentado, ainda não iniciado): estender a cascata medida no Marco 1 com as etapas *auditar* e *aprender*, um PR por task com spec própria:
-   - **`005-judge-audit` — Componente H (§5.8, futuro)**: juiz LLM (*LLM-as-a-Judge*, análogo de laboratório do Revisor). Spec a criar em `docs/judge-spec.md`. Audita uma amostra (taxa no config) dos registros de `results/raw_benchmark_data.json` — reuso que dispensa re-rodar o benchmark — verificando a predição da cascata contra premissa/hipótese; discordâncias disparam uma tentativa de reclassificação com o feedback do juiz no prompt. Métrica: taxa de concordância e efeito da reclassificação.
-   - **`006-insights-loop` — Componente I (§5.9, futuro)**: memória operacional (a etapa *aprender*). Discordâncias do juiz viram insights estruturados (`results/insights.json`); os principais insights são injetados no prompt do System 2 e o delta de acurácia com/sem é medido no mesmo conjunto congelado. É o que fecha o ciclo: classificar → auditar → aprender → melhorar.
-   - **`007-hitl-review` (opcional)**: casos não resolvidos (juiz discorda e a reclassificação falha) exportados em CSV de revisão humana; correções reinjetadas como insights.
-   - **Fora de escopo deliberado — análogo do Pepper**: o Pepper existe porque o catálogo do iFood não tem ground truth; o ASSIN 2 tem. A mineração do subconjunto onde a cascata erra — que seria o equivalente útil — já é coberta pelo loop de insights do Componente I.
-4. **Marco 4 — Hugging Face Space (Gradio)**: Publicação de um Space interativo permitindo a comparação em tempo real de latência entre System 1 e System 2.
-5. **Marco 5 — Artigo Técnico no LinkedIn**: Publicação do estudo de caso articulando a redução de latência no p95 em +50% e a economia de tokens de +60%, fundamentado nas referências do iFood e do RouteLLM.
+3. **Marco 3 — Pivot de dataset para NCM** (decidido em 2026-11-14; branch `005-dataset-pivot-ncm`; spec em `docs/dataset-pivot-ncm-spec.md`): substituir o ASSIN 2 pela classificação de itens de catálogo em códigos NCM (taxonomia fiscal brasileira em árvore: capítulo → posição → subposição → item de 8 dígitos; dataset público `yurifacanha/NCM-RAFT-samall`, 105k linhas em PT-BR com nomes reais de itens), reproduzindo o tipo de conteúdo do ciclo do iFood — nomes curtos e ambíguos, contexto incompleto, *long tail*. Reusa o harness, o roteador por confiança e o sweep de α por replay sem mudança de desenho. Mudam: o loader (parser do dataset + amostragem congelada cabeça/cauda de 800 itens com seed fixa), os prompts (saída = código NCM em JSON) e o mecanismo do System 1 (geração curta de 8–12 tokens com confiança pelos *logprobs* dos tokens, no lugar da pergunta `choice` binária do `/v1/systemone`; código inexistente na taxonomia → confiança 0 → escala ao System 2, espelhando o "caso novo → fallback" do blog). Gates redefinidos: gap S2−S1 ≥ 10 pp na cauda, cascata recuperando ≥ 50% do gap, redução de tokens ≥ 60% e taxa de fallback reportada contra a banda de 30–50% do blog. O ASSIN 2 sai da linha principal do relatório (medição do Marco 1 preservada no histórico, commit `79a8654`).
+4. **Marco 4 — Ciclo de Agentes de Auditoria** (inspirado no ciclo Sugar → Revisor → Pepper do iFood; *roadmap* documentado, ainda não iniciado; era "Marco 3" antes do pivot de 2026-11-14): estender a cascata medida no dataset NCM com as etapas *auditar* e *aprender*, um PR por task com spec própria:
+   - **`006-judge-audit` — Componente H (§5.8, futuro)**: juiz LLM (*LLM-as-a-Judge*, análogo de laboratório do Revisor). Spec a criar em `docs/judge-spec.md`. Audita uma amostra (taxa no config) dos registros de `results/raw_benchmark_data.json` — reuso que dispensa re-rodar o benchmark — verificando a predição da cascata contra o nome do item e a descrição do capítulo do código NCM correto; discordâncias disparam uma tentativa de reclassificação com o feedback do juiz no prompt. Métrica: taxa de concordância e efeito da reclassificação.
+   - **`007-insights-loop` — Componente I (§5.9, futuro)**: memória operacional (a etapa *aprender*). Discordâncias do juiz viram insights estruturados (`results/insights.json`); os principais insights são injetados no prompt do System 2 e o delta de acurácia com/sem é medido no mesmo conjunto congelado. É o que fecha o ciclo: classificar → auditar → aprender → melhorar.
+   - **`008-hitl-review` (opcional)**: casos não resolvidos (juiz discorda e a reclassificação falha) exportados em CSV de revisão humana; correções reinjetadas como insights.
+   - **Fora de escopo deliberado — análogo do Pepper**: o Pepper existe porque o catálogo do iFood não tem ground truth; o dataset NCM tem (o código anotado). A mineração do subconjunto onde a cascata erra — que seria o equivalente útil — já é coberta pelo loop de insights do Componente I.
+5. **Marco 5 — Hugging Face Space (Gradio)**: Publicação de um Space interativo permitindo a comparação em tempo real de latência entre System 1 e System 2.
+6. **Marco 6 — Artigo Técnico no LinkedIn**: Publicar o estudo de caso com os números medidos no dataset NCM (gap de acurácia na cauda, recuperação da cascata, economia de tokens e taxa de fallback), fundamentado nas referências do iFood e do RouteLLM.
 
 ---
 
@@ -298,7 +301,8 @@ adaptive-cascade-routing/
   *Mitigação*: Ignorar as primeiras 5 requisições de *warmup* e reportar percentis estatísticos ($p50, p95, p99$) agregados em 200 iterações.
 
 ### Questões em Aberto
-- Qual o valor ideal do limiar $\alpha$ para o dataset ASSIN 2 que maximiza a acurácia enquanto mantém a invocação do System 2 abaixo de 15% das requisições? (Será respondido na varredura empírica do benchmark).
+- Qual o valor ideal do limiar $\alpha$ para o dataset NCM (pós-pivot, branch `005-dataset-pivot-ncm`) que maximiza a acurácia mantendo a taxa de escalamento ao System 2 na banda de 30–50% reportada pelo blog do iFood? (Será respondido na varredura empírica do benchmark.)
+- Qual a granularidade de rótulo NCM (capítulo, posição ou item de 8 dígitos) em que o System 1 puro fica na faixa de 30–70% de acurácia — o terreno com ambiguidade real para este par modelo+tarefa? (Será respondida pela célula de sonda da spec do pivot.)
 
 ---
 

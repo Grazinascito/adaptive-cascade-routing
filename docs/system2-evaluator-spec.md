@@ -4,6 +4,8 @@
 **Status**: Draft
 **Input**: Detailed Design Sections 5.6 (Component F: System 2 Slow-Path Engine - `system2.py`) and 5.7 (Component G: Benchmark & Performance Evaluation Harness - `evaluator.py`) from Design Doc `docs/adaptive-cascade-design-doc.md`.
 
+> **Nota de pivot (2026-11-14)**: a tarefa e o dataset do benchmark estão sendo trocados (NLI binária / ASSIN 2 → classificação de itens de catálogo em códigos NCM) pela task `005-dataset-pivot-ncm` — spec em [`docs/dataset-pivot-ncm-spec.md`](dataset-pivot-ncm-spec.md). O Componente F troca o prompt/rótulo (par de frases → nome de item → código NCM) e o Componente G ganha os gates redefinidos (SC-A/B/C por subconjunto cabeça/cauda); o desenho do harness e do sweep é reusado. As stories abaixo descrevem o estado implementado do Marco 1 e serão reescritas nessa task; a medição do Marco 1 no ASSIN 2 permanece no histórico do git (commit `79a8654`).
+
 ---
 
 ## Component Overview

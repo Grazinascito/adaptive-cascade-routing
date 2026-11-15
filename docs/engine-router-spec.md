@@ -4,6 +4,8 @@
 **Status**: Draft
 **Input**: Detailed Design Sections 5.2 (Component B: vLLM Server Manager), 5.3 (Component C: System 1 Engine), 5.4 (Component D: Confidence & Entropy Evaluator), and 5.5 (Component E: Adaptive Cascade Router) from Design Doc `docs/adaptive-cascade-design-doc.md`.
 
+> **Nota de pivot (2026-11-14)**: a tarefa e o dataset do benchmark estão sendo trocados (NLI binária / ASSIN 2 → classificação de itens de catálogo em códigos NCM) pela task `005-dataset-pivot-ncm` — spec em [`docs/dataset-pivot-ncm-spec.md`](dataset-pivot-ncm-spec.md). O Componente C (System 1) muda de mecanismo nessa task (pergunta `choice` binária → geração curta de código com confiança pelos logprobs); os Componentes B, D e E são reusados. As stories abaixo descrevem o estado implementado do Marco 1 e serão reescritas nessa task; a medição do Marco 1 no ASSIN 2 permanece no histórico do git (commit `79a8654`).
+
 ---
 
 ## Component Overview

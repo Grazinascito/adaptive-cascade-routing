@@ -1,7 +1,7 @@
 """EntropyEvaluator + CascadeRouter — entropia de Shannon e decisão de rota (α, RouteLLM).
 
-Componentes D e E do design doc (docs/adaptive-cascade-design-doc.md §5.4 e
-§5.5); stories correspondentes em docs/engine-router-spec.md. Pós-pivot NCM
+Componentes D e E (tabela de componentes no README);
+stories correspondentes em docs/engine-router-spec.md. Pós-pivot NCM
 (2026-11-14) não há mais pergunta `choice` binária: o sinal de incerteza do
 fast-path é a média geométrica dos logprobs dos tokens gerados (calculada em
 src/engine/system1.py) e a entropia de Shannon sobre os top-logprobs do

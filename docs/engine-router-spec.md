@@ -7,10 +7,10 @@
 
 ## Component Overview
 
-- **Componente B (§5.2): vLLM Serving Infrastructure (`vLLMServerManager`)**: inalterado do Marco 1 — sobe e monitora o servidor local com `--enable-prefix-caching`.
-- **Componente C (§5.3): System 1 Short Classification Engine (`system1.py`)**: `/v1/chat/completions` com `max_tokens=12`, `temperature=0.0`, `logprobs=True`, `top_logprobs=20` e `enable_thinking=False`; produz o código NCM de 8 dígitos sem raciocínio. Confiança = média geométrica das probabilidades dos tokens gerados; código inexistente na taxonomia (ou ausente) → confiança 0.0 (escala). Entropia = Shannon sobre os top-logprobs do primeiro token. A pergunta `choice` do `/v1/systemone` caiu com o pivot (114 classes não cabem em opções de 1 token).
-- **Componente D (§5.4): Uncertainty Signals (`router.py`)**: pós-pivot, `shannon_entropy` (reusada pelo System 1) e a confiança geométrica calculada em `system1.py`; `softmax`/`compute_metrics` da era `choice` foram removidos por não terem mais chamador.
-- **Componente E (§5.5): Adaptive Cascade Router (`router.py`)**: `route(query, confidence, alpha, system2)` inalterado na lógica (RouteLLM $R_\alpha$); `RoutingQuery` agora carrega `item_name` e o handler devolve código NCM (`str`).
+- **Componente B: vLLM Serving Infrastructure (`vLLMServerManager`)**: inalterado do Marco 1 — sobe e monitora o servidor local com `--enable-prefix-caching`.
+- **Componente C: System 1 Short Classification Engine (`system1.py`)**: `/v1/chat/completions` com `max_tokens=12`, `temperature=0.0`, `logprobs=True`, `top_logprobs=20` e `enable_thinking=False`; produz o código NCM de 8 dígitos sem raciocínio. Confiança = média geométrica das probabilidades dos tokens gerados; código inexistente na taxonomia (ou ausente) → confiança 0.0 (escala). Entropia = Shannon sobre os top-logprobs do primeiro token. A pergunta `choice` do `/v1/systemone` caiu com o pivot (114 classes não cabem em opções de 1 token).
+- **Componente D: Uncertainty Signals (`router.py`)**: pós-pivot, `shannon_entropy` (reusada pelo System 1) e a confiança geométrica calculada em `system1.py`; `softmax`/`compute_metrics` da era `choice` foram removidos por não terem mais chamador.
+- **Componente E: Adaptive Cascade Router (`router.py`)**: `route(query, confidence, alpha, system2)` inalterado na lógica (RouteLLM $R_\alpha$); `RoutingQuery` agora carrega `item_name` e o handler devolve código NCM (`str`).
 
 ---
 

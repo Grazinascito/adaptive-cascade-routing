@@ -3,7 +3,7 @@
 É o fallback da cascata (slow-path). Após o pivot NCM (2026-11-14), a tarefa é
 classificar o nome de um item de catálogo em código NCM de 8 dígitos; o prompt
 carrega a lista compacta de capítulos como contexto da taxonomia (o "mapa da
-árvore" do blog do iFood). Componente F do design doc (§5.6); stories em
+árvore" do blog do iFood). Componente F; stories em
 docs/system2-evaluator-spec.md e docs/dataset-pivot-ncm-spec.md (Story 5).
 """
 
@@ -125,9 +125,9 @@ def execute_reasoning(
     timeout_s: float = 120.0,
     client: httpx.Client | None = None,
 ) -> System2Output:
-    """Executa o slow-path CoT+JSON (FR-001/FR-002, NFR-001) e retorna System2Output.
+    """Executa o slow-path CoT+JSON (FR-001/FR-002 da spec F–G) e retorna System2Output.
 
-    A geração é limitada a `max_tokens` (NFR-001) com `temperature=0.0`
+    A geração é limitada a `max_tokens` com `temperature=0.0`
     (reprodutibilidade do benchmark). Saída não conforme cai na cadeia de
     fallbacks com `fallback_used=True` e warning; erros de status/timeout/
     conexão do httpx propagam — o fallback para a previsão do System 1 é

@@ -1,6 +1,6 @@
 """BenchmarkHarness — orquestra os 3 cenários e gera relatórios e gráficos de métricas.
 
-Componente G do design doc (docs/adaptive-cascade-design-doc.md §5.7);
+Componente G (tabela de componentes no README);
 stories correspondentes em docs/system2-evaluator-spec.md e, pós-pivot NCM
 (2026-11-14), em docs/dataset-pivot-ncm-spec.md (Story 6). Tipos e métricas
 puras ficam em src/metrics/summary.py; este módulo faz a orquestração dos
@@ -388,7 +388,7 @@ def save_raw_results(
     summaries: Mapping[str, object],
     kpis: Mapping[str, object] | None,
 ) -> None:
-    """Grava `results/raw_benchmark_data.json` (NFR-002: auditabilidade)."""
+    """Grava `results/raw_benchmark_data.json` (auditabilidade do run)."""
     payload = {
         "meta": dict(meta),
         "scenarios": {name: list(records) for name, records in scenarios.items()},

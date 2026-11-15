@@ -7,8 +7,8 @@
 
 ## Component Overview
 
-- **Componente F (§5.6): System 2 NCM (`system2.py`)**: mesmo mecanismo do Marco 1 (CoT + JSON via `/v1/chat/completions`, `max_tokens=256`, `enable_thinking=False`), com prompt reescrito: lista de capítulos como contexto da taxonomia + nome do item + JSON `{"reasoning", "ncm_code"}`. Cadeia de fallback JSON → regex `\b\d{8}\b` → sentinela `00000000`.
-- **Componente G (§5.7): Benchmark Harness (`evaluator.py` + `summary.py`)**: 3 cenários sobre o conjunto congelado head/tail; `BenchmarkResult` ganha `subset`; tokens somam os engines invocados; gates SC-A/B/C; sweep de α por replay; gate anti-degeneração; taxa de fallback comparada à banda 30–50% do blog.
+- **Componente F: System 2 NCM (`system2.py`)**: mesmo mecanismo do Marco 1 (CoT + JSON via `/v1/chat/completions`, `max_tokens=256`, `enable_thinking=False`), com prompt reescrito: lista de capítulos como contexto da taxonomia + nome do item + JSON `{"reasoning", "ncm_code"}`. Cadeia de fallback JSON → regex `\b\d{8}\b` → sentinela `00000000`.
+- **Componente G: Benchmark Harness (`evaluator.py` + `summary.py`)**: 3 cenários sobre o conjunto congelado head/tail; `BenchmarkResult` ganha `subset`; tokens somam os engines invocados; gates SC-A/B/C; sweep de α por replay; gate anti-degeneração; taxa de fallback comparada à banda 30–50% do blog.
 
 ---
 

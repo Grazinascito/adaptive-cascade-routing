@@ -1,6 +1,6 @@
 """Tipos do registro bruto e agregações puras do benchmark (Componente G).
 
-Componente G do design doc (docs/adaptive-cascade-design-doc.md §5.7);
+Componente G (tabela de componentes no README);
 stories correspondentes em docs/system2-evaluator-spec.md e, após o pivot
 NCM (2026-11-14), em docs/dataset-pivot-ncm-spec.md (Story 6). Este módulo é
 puro — sem HTTP, sem router — para que as métricas sejam testáveis
@@ -22,7 +22,7 @@ Scenario = Literal["system1_pure", "system2_pure", "cascade"]
 
 
 class BenchmarkResult(TypedDict):
-    """Registro bruto de uma requisição do benchmark (RNF-04 + FR-006).
+    """Registro bruto de uma requisição do benchmark (FR-006 de docs/engine-router-spec.md).
 
     Campos `None` significam "não aplicável ao cenário": `system_1_latency_ms`,
     `confidence` e `entropy` são None só em `system2_pure`; `system_2_*` é
@@ -176,7 +176,7 @@ def macro_f1(predictions: Sequence[str], ground_truths: Sequence[str]) -> float:
 
 
 def apgr(cascade_accuracy: float, system1_accuracy: float, system2_accuracy: float) -> float:
-    """Average Performance Gap Recovered (§5.7 do design doc).
+    """Average Performance Gap Recovered (métrica definida pelo RouteLLM).
 
     APGR = (Acc(cascata) - Acc(S1)) / (Acc(S2) - Acc(S1)). Quando System 1 e
     System 2 têm a mesma acurácia, o gap é zero e não há nada a recuperar:
@@ -209,7 +209,8 @@ def compute_summary_metrics(
 ) -> SummaryReport:
     """Agrega os registros de UM cenário em um SummaryReport.
 
-    O warmup discard (design doc §10, risco 2) remove as `warmup_discard`
+    O warmup discard (mitigação da oscilação de latência em ambiente
+    compartilhado como o Colab) remove as `warmup_discard`
     primeiras requisições SÓ dos percentis de latência (cache frio distorce
     latência, não corretude); acurácia, F1, tokens e taxas usam todas as
     requisições. `apgr` só é calculado para a cascata com as baselines S1/S2

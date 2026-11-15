@@ -21,7 +21,7 @@ _Avoid_: modelo pesado, LLM de raciocínio
 **Cascata Adaptativa (Adaptive Cascade)**:
 Estratégia que aceita a resposta do System 1 quando a confiança é alta e escala para o
 System 2 quando a incerteza estatística é alta.
-_Avoid_: fallback geral, híbrido, roteador dinâmico genérico
+_Avoid_: fallback geral, roteador dinâmico genérico
 
 **Limiar α (alpha)**:
 Valor de corte da confiança que separa aceitar o System 1 de escalar para o System 2

@@ -145,9 +145,9 @@ Runtime esperado: ~25–45 min de Colab (800 chamadas S1 curtas + 800 chamadas S
 
 ## Reescrita de docs incluída nesta task
 
-- `README.md`: cenários, badge de dataset, KPIs e estrutura passam a descrever o NCM; o ASSIN 2 sai da linha principal com nota histórica de uma linha apontando para o commit `79a8654`. (A reescrita acontece junto com o código novo e os resultados medidos — reescrever antes criaria um README descrevendo um benchmark que ainda não existe.)
-- `docs/adaptive-cascade-design-doc.md`: RF-1, §2, §5.1, §5.3 e §5.6 atualizados para a tarefa NCM; registro do pivot mantido.
-- `docs/dataset-loader-spec.md`, `docs/engine-router-spec.md`, `docs/system2-evaluator-spec.md`: stories reescritas para a tarefa NCM (as notas de pivot no topo destes arquivos são removidas ao serem incorporadas).
+- `README.md`: reescrito do zero com o objetivo do projeto na frente (decisão de 2026-11-15, "reboot das docs"); o ASSIN 2 sai da linha principal com nota histórica apontando para o commit `79a8654`.
+- `docs/adaptive-cascade-design-doc.md`: removido no reboot das docs (2026-11-15) — o roteiro de Marcos, as referências e a tabela de componentes A–G migraram para o README; o documento permanece no histórico do git.
+- `docs/dataset-loader-spec.md`, `docs/engine-router-spec.md`, `docs/system2-evaluator-spec.md`: stories reescritas para a tarefa NCM e autonomas (sem âncoras ao design doc).
 - `CONTEXT.md`: verbete NCM adicionado ao glossário.
 
 ## Edge Cases

@@ -2,7 +2,6 @@
 name = "adaptive-cascade-routing"
 version = "0.1.0"
 description = "Benchmark empírico do padrão de cascata de inferência: System 1 (logprobs) vs System 2 (CoT) no mesmo modelo, classificando itens de catálogo em códigos NCM (PT-BR)"
-readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"

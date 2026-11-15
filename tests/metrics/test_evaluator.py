@@ -5,7 +5,6 @@ limite da rede, imitando o contrato do /v1/chat/completions para os dois
 engines (System 1: geração curta com logprobs por token; System 2: CoT +
 JSON). O stub distingue os engines pelo corpo da request: o System 1 manda
 messages[0].role == "system" e logprobs; o System 2 manda só user.
-Corresponde à Story 6 de docs/dataset-pivot-ncm-spec.md.
 """
 
 import json

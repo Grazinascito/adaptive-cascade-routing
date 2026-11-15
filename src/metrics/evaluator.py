@@ -1,8 +1,6 @@
 """BenchmarkHarness — orquestra os 3 cenários e gera relatórios e gráficos de métricas.
 
-Componente G (tabela de componentes no README);
-stories correspondentes em docs/system2-evaluator-spec.md e, pós-pivot NCM
-(2026-11-14), em docs/dataset-pivot-ncm-spec.md (Story 6). Tipos e métricas
+Componente G. Tipos e métricas
 puras ficam em src/metrics/summary.py; este módulo faz a orquestração dos
 engines C/F sobre o router D/E, a persistência dos artefatos de results/ e
 a CLI `python -m src.metrics.evaluator --config ...`.

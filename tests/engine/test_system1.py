@@ -2,8 +2,8 @@
 
 O vLLM real nunca é chamado: as respostas vêm de httpx.MockTransport no
 limite da rede, imitando o contrato do /v1/chat/completions com logprobs
-por token. Corresponde à Story 4 de docs/dataset-pivot-ncm-spec.md
-(Decisão 1(d): confiança = média geométrica dos logprobs dos tokens).
+por token. Cobre a decisão do pivot NCM: confiança = média geométrica
+dos logprobs dos tokens gerados.
 """
 
 import json

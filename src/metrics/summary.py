@@ -1,8 +1,6 @@
 """Tipos do registro bruto e agregações puras do benchmark (Componente G).
 
-Componente G (tabela de componentes no README);
-stories correspondentes em docs/system2-evaluator-spec.md e, após o pivot
-NCM (2026-11-14), em docs/dataset-pivot-ncm-spec.md (Story 6). Este módulo é
+Componente G. Este módulo é
 puro — sem HTTP, sem router — para que as métricas sejam testáveis
 isoladamente; a orquestração de engines e a persistência ficam em
 src/metrics/evaluator.py.
@@ -22,7 +20,7 @@ Scenario = Literal["system1_pure", "system2_pure", "cascade"]
 
 
 class BenchmarkResult(TypedDict):
-    """Registro bruto de uma requisição do benchmark (FR-006 de docs/engine-router-spec.md).
+    """Registro bruto de uma requisição do benchmark (FR-006).
 
     Campos `None` significam "não aplicável ao cenário": `system_1_latency_ms`,
     `confidence` e `entropy` são None só em `system2_pure`; `system_2_*` é

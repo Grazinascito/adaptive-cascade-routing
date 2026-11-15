@@ -4,8 +4,7 @@ Pivot de dataset (2026-11-14): o ASSIN 2 saiu da linha principal porque a tese
 do projeto (ganhos da cascata híbrida no eixo System 1 × System 2) exige cauda
 ambígua de catálogo, o tipo de conteúdo do blog do iFood. O loader agora resolve
 a tarefa "nome de item de catálogo → código NCM de 8 dígitos" sobre
-`yurifacanha/NCM-RAFT-samall`; requisitos completos e stories em
-docs/dataset-pivot-ncm-spec.md. A implementação ASSIN 2 permanece no histórico
+`yurifacanha/NCM-RAFT-samall`. A implementação ASSIN 2 permanece no histórico
 do git (commit `79a8654` e anteriores).
 """
 

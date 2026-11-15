@@ -3,8 +3,7 @@
 É o fallback da cascata (slow-path). Após o pivot NCM (2026-11-14), a tarefa é
 classificar o nome de um item de catálogo em código NCM de 8 dígitos; o prompt
 carrega a lista compacta de capítulos como contexto da taxonomia (o "mapa da
-árvore" do blog do iFood). Componente F; stories em
-docs/system2-evaluator-spec.md e docs/dataset-pivot-ncm-spec.md (Story 5).
+árvore" do blog do iFood). Componente F.
 """
 
 import json

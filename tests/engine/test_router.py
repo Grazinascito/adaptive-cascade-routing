@@ -1,7 +1,6 @@
 """Testes dos Componentes D e E: entropia de Shannon e decisão de rota da cascata.
 
-Cada teste corresponde a um cenário de aceite das Stories 3–4 de
-docs/engine-router-spec.md, sem depender de vLLM nem de rede. Pós-pivot
+Cada teste cobre um cenário de aceite, sem depender de vLLM nem de rede. Pós-pivot
 NCM (2026-11-14) o sinal de incerteza vem dos logprobs da geração curta;
 `softmax`/`compute_metrics` da era /v1/systemone foram removidos com o
 endpoint (histórico no git, commit 79a8654 e anteriores).

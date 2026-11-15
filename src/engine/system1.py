@@ -1,6 +1,6 @@
 """System1Engine — classificação NCM em geração curta com confiança por logprobs.
 
-Pivot NCM (2026-11-14), Decisão 1(d) da spec docs/dataset-pivot-ncm-spec.md:
+Pivot NCM (2026-11-14):
 com 114 códigos candidatos, a pergunta `choice` binária do `/v1/systemone`
 não se aplica; o fast-path passa a ser uma chamada `/v1/chat/completions`
 com `max_tokens` curto (12), sem raciocínio, produzindo o código de 8

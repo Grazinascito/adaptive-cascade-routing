@@ -1,8 +1,7 @@
 """Testes das métricas puras do Componente G (src/metrics/summary.py).
 
 Funções puras: entradas e saídas são valores — nenhum mock é necessário.
-Corresponde às Stories 2 e 3 de docs/system2-evaluator-spec.md e à Story 6
-de docs/dataset-pivot-ncm-spec.md (subconjuntos head/tail e gates novos).
+Cobre subconjuntos head/tail e os gates novos do pivot NCM.
 """
 
 import statistics

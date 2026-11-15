@@ -4,7 +4,6 @@ Sem rede: o parser roda sobre stubs de conversa no formato real do dataset
 (yurifacanha/NCM-RAFT-samall, colunas conversation_id/conversations com
 papel 'user'/'assistant'); a taxonomia lê o CSV commitado
 config/ncm_taxonomy.csv; a amostragem roda sobre itens sintéticos.
-Corresponde às Stories 1–3 de docs/dataset-pivot-ncm-spec.md.
 """
 
 import pytest

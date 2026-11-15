@@ -1,8 +1,8 @@
 """Testes do Componente F pós-pivot: System 2 NCM com Chain-of-Thought e JSON.
 
 O vLLM real nunca é chamado: as respostas vêm de httpx.MockTransport no
-limite da rede, imitando /v1/chat/completions. Corresponde à Story 5 de
-docs/dataset-pivot-ncm-spec.md (JSON com ncm_code, fallback regex e default).
+limite da rede, imitando /v1/chat/completions. Cobre JSON com ncm_code,
+fallback regex e sentinela default.
 """
 
 import json

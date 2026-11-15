@@ -99,7 +99,8 @@ adaptive-cascade-routing/
 │   │   └── router.py                # Softmax, Shannon entropy, and RouteLLM cascade logic
 │   └── metrics/
 │       ├── __init__.py
-│       └── evaluator.py             # Benchmark harness (p50/p95/p99 latency, tokens, APGR)
+│       ├── summary.py               # BenchmarkResult/SummaryReport types + pure metrics (percentiles, macro F1, APGR)
+│       └── evaluator.py             # Benchmark harness, alpha sweep, results/ artifacts, CLI
 ├── notebook/
 │   └── adaptive_cascade_benchmark.ipynb # Google Colab end-to-end executable notebook (Marco 1)
 ├── results/
@@ -153,7 +154,7 @@ python -m vllm.entrypoints.openai.api_server \
     --port 8000
 ```
 
-2. **Execute the full benchmark suite**:
+2. **Execute the full benchmark suite** (3 scenarios over the frozen 200-sample set at the config's default alpha, plus the alpha sweep replay; writes `results/raw_benchmark_data.json` and `results/latency_cost_tradeoff.png`, and prints each KPI with a PASS/FAIL verdict):
 
 ```bash
 python -m src.metrics.evaluator --config config/benchmark_config.yaml

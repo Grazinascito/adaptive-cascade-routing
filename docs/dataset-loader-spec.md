@@ -5,6 +5,8 @@
 **Status**: Draft  
 **Input**: Description: "Dataset ingestion, label normalization, prompt formatting for vLLM Prefix Caching, and frozen test set sampling for ASSIN 2 PT-BR benchmark"
 
+> **Nota de pivot (2026-11-14)**: a tarefa e o dataset do benchmark estão sendo trocados (NLI binária / ASSIN 2 → classificação de itens de catálogo em códigos NCM) pela task `005-dataset-pivot-ncm` — spec em [`docs/dataset-pivot-ncm-spec.md`](dataset-pivot-ncm-spec.md). As stories abaixo descrevem o estado implementado do Marco 1 e serão reescritas nessa task; a medição do Marco 1 no ASSIN 2 permanece no histórico do git (commit `79a8654`).
+
 ---
 
 ## Stories & Testing *(mandatory)*

@@ -12,6 +12,7 @@ SKELETON_MODULES = (
     "src.engine.system2",
     "src.engine.router",
     "src.metrics",
+    "src.metrics.summary",
     "src.metrics.evaluator",
 )
 

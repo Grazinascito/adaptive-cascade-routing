@@ -1,209 +1,151 @@
-"""Testes do Componente A: ingestão, normalização e amostragem do ASSIN 2.
+"""Testes do loader NCM: parser, taxonomia e amostragem congelada head/tail.
 
-Cada teste corresponde a um cenário de aceite de docs/dataset-loader-spec.md.
-Os testes de ingestão baixam o dataset real do Hugging Face na primeira execução
-por máquina; depois, a biblioteca `datasets` usa a cópia local em cache.
+Sem rede: o parser roda sobre stubs de conversa no formato real do dataset
+(yurifacanha/NCM-RAFT-samall, colunas conversation_id/conversations com
+papel 'user'/'assistant'); a taxonomia lê o CSV commitado
+config/ncm_taxonomy.csv; a amostragem roda sobre itens sintéticos.
 """
-
-import hashlib
-import json
-import logging
-from collections import Counter
-from collections.abc import Iterator
-from typing import Any
 
 import pytest
 
-from src.data.loader import (
-    SYSTEM1_SYSTEM_PREFIX,
-    DatasetDownloadError,
-    format_system1_prompt,
-    get_frozen_eval_set,
-    load_assin2_raw_split,
-    normalize_label,
-)
+from src.data import loader
 
 
-def test_normalize_label_maps_entailment_and_none_to_the_binary_contract() -> None:
-    assert normalize_label("ENTAILMENT") == "Entailment"
-    assert normalize_label("NONE") == "Contradiction"
+def _conversation(name: str, code: str, description: str = "Bebidas, líquidos alcoólicos.") -> list:
+    return [
+        {
+            "role": "user",
+            "content": (
+                " contexto: [o codigo da categoria do "
+                f"{name} é: {code}],"
+                f"[a categoria {code} possui a seguinte descrição: {description}]"
+            ),
+        },
+        {"role": "assistant", "content": f"o produto {name} possui categoria: {description}"},
+    ]
 
 
-def test_normalize_label_raises_invalid_assin2_label_for_any_other_value() -> None:
-    invalid_values: list[Any] = ["PARAPHRASE", "", "entailment", 1, None]
-    for raw in invalid_values:
-        with pytest.raises(ValueError, match="Invalid ASSIN2 label"):
-            normalize_label(raw)
+class TestParseConversation:
+    def test_parses_conversation_into_name_and_code(self) -> None:
+        item = loader.parse_conversation(_conversation("ALCOOL LIQUIDO START NAT 70%", "22071090"))
+        assert item is not None
+        assert item["name"] == "ALCOOL LIQUIDO START NAT 70%"
+        assert item["ncm_code"] == "22071090"
 
-
-def test_load_assin2_raw_split_returns_all_2448_test_samples_fully_labeled() -> None:
-    samples = load_assin2_raw_split(split="test")
-
-    assert len(samples) == 2448
-    for sample in samples:
-        assert isinstance(sample["premise"], str) and sample["premise"].strip()
-        assert isinstance(sample["hypothesis"], str) and sample["hypothesis"].strip()
-        assert sample["label"] in ("Entailment", "Contradiction")
-        assert 1.0 <= sample["original_score"] <= 5.0
-
-    ids = [sample["id"] for sample in samples]
-    assert len(set(ids)) == len(ids)
-
-    label_counts = Counter(sample["label"] for sample in samples)
-    assert label_counts == Counter({"Entailment": 1224, "Contradiction": 1224})
-
-
-def test_load_assin2_raw_split_wraps_download_failure_in_dataset_download_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _raise_oserror(*_args: Any, **_kwargs: Any) -> None:
-        raise OSError("hub unreachable")
-
-    monkeypatch.setattr("src.data.loader.load_dataset", _raise_oserror)
-
-    with pytest.raises(DatasetDownloadError):
-        load_assin2_raw_split(split="test")
-
-
-class _StubDataset:
-    """Stub com a interface de `datasets.Dataset` usada pelo loader.
-
-    `entailment_judgment` chega como string (não como ClassLabel int),
-    exercitando o caminho sem decoding `int2str`.
-    """
-
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
-        self.column_names = [
-            "sentence_pair_id",
-            "premise",
-            "hypothesis",
-            "relatedness_score",
-            "entailment_judgment",
+    def test_reports_none_when_answer_has_no_eight_digit_code(self) -> None:
+        broken = [
+            {"role": "user", "content": " contexto sem o par canonico de codigo"},
         ]
-        self.features: dict[str, Any] = {"entailment_judgment": "string"}
-        self._rows = rows
+        assert loader.parse_conversation(broken) is None
 
-    def __iter__(self) -> Iterator[dict[str, Any]]:
-        return iter(self._rows)
+    def test_reports_none_for_empty_conversation(self) -> None:
+        assert loader.parse_conversation([]) is None
+
+    def test_drops_names_shorter_than_minimum_length(self) -> None:
+        item = loader.parse_conversation(_conversation("AB", "22071090"))
+        assert item is None
 
 
-def test_load_assin2_raw_split_filters_empty_or_blank_rows_with_warning(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    rows: list[dict[str, Any]] = [
-        {
-            "sentence_pair_id": 1,
-            "premise": "premissa válida",
-            "hypothesis": "hipótese válida",
-            "relatedness_score": 4.0,
-            "entailment_judgment": "ENTAILMENT",
-        },
-        {
-            "sentence_pair_id": 2,
-            "premise": "",
-            "hypothesis": "hipótese",
-            "relatedness_score": 3.0,
-            "entailment_judgment": "NONE",
-        },
-        {
-            "sentence_pair_id": 3,
-            "premise": "premissa",
-            "hypothesis": None,
-            "relatedness_score": 3.0,
-            "entailment_judgment": "NONE",
-        },
-        {
-            "sentence_pair_id": 4,
-            "premise": "   ",
-            "hypothesis": "hipótese",
-            "relatedness_score": 3.0,
-            "entailment_judgment": "NONE",
-        },
+class TestTaxonomy:
+    def test_is_valid_code_accepts_known_and_rejects_unknown_codes(self) -> None:
+        taxonomy = loader.load_taxonomy()
+        assert loader.is_valid_code("22071090", taxonomy) is True
+        assert loader.is_valid_code("99999999", taxonomy) is False
+        assert loader.is_valid_code("00000000", taxonomy) is False
+
+    def test_taxonomy_csv_has_unique_codes_and_no_blank_descriptions(self) -> None:
+        taxonomy = loader.load_taxonomy()
+        assert len(taxonomy) > 0
+        assert len({entry["code"] for entry in taxonomy.values()}) == len(taxonomy)
+        assert all(entry["description"].strip() for entry in taxonomy.values())
+
+    def test_chapter_lines_list_every_chapter_once(self) -> None:
+        lines = loader.chapter_lines()
+        assert len(lines) == len({line.split(" - ")[0] for line in lines})
+        assert all(line[:2].isdigit() for line in lines)
+
+
+class TestPoolStats:
+    def test_extraction_success_rate_counts_malformed_rows(self) -> None:
+        items = [
+            loader.NCMItem(item_id=i, name=f"ITEM {i} XYZ", ncm_code="22071090") for i in range(970)
+        ]
+        stats = loader.pool_stats(items, n_rows=1000)
+        assert stats["n_rows"] == 1000
+        assert stats["n_parsed"] == 970
+        assert stats["extraction_rate"] == pytest.approx(0.97)
+        assert stats["unique_codes"] == 1
+
+    def test_conflicting_names_are_counted(self) -> None:
+        items = [
+            loader.NCMItem(item_id=0, name="AGUA MINERAL", ncm_code="22011000"),
+            loader.NCMItem(item_id=1, name="AGUA MINERAL", ncm_code="22019000"),
+            loader.NCMItem(item_id=2, name="REFRIGERANTE COLA", ncm_code="22021000"),
+        ]
+        stats = loader.pool_stats(items, n_rows=3)
+        assert stats["conflicting_names"] == 1
+        assert stats["unique_names"] == 2
+
+
+def _pool_with_codes(codes_by_name: dict[str, str]) -> list[loader.NCMItem]:
+    return [
+        loader.NCMItem(item_id=index, name=name, ncm_code=code)
+        for index, (name, code) in enumerate(codes_by_name.items())
     ]
 
-    def _stub_load_dataset(*_args: Any, **_kwargs: Any) -> _StubDataset:
-        return _StubDataset(rows)
 
-    monkeypatch.setattr("src.data.loader.load_dataset", _stub_load_dataset)
+class TestFrozenEvalSet:
+    def _pool(self) -> list[loader.NCMItem]:
+        pool: dict[str, str] = {}
+        # 1 código head (60 itens) + 2 códigos tail (3 itens cada).
+        for i in range(60):
+            pool[f"ITEM HEAD {i} AAA"] = "22071090"
+        for i in range(3):
+            pool[f"ITEM TAIL UM {i} BBB"] = "33072010"
+            pool[f"ITEM TAIL DOIS {i} CCC"] = "96190000"
+        return _pool_with_codes(pool)
 
-    with caplog.at_level(logging.WARNING, logger="src.data.loader"):
-        samples = load_assin2_raw_split(split="test")
+    def test_frozen_eval_set_is_deterministic_with_seed_42(self) -> None:
+        first = loader.get_frozen_eval_set(self._pool(), sample_limit=10, head_share=0.6)
+        second = loader.get_frozen_eval_set(self._pool(), sample_limit=10, head_share=0.6)
+        assert first == second
 
-    assert [sample["id"] for sample in samples] == [1]
-    assert samples[0]["label"] == "Entailment"
-    assert "dropped 3 rows" in caplog.text
+    def test_head_tail_proportions_match_configured_target(self) -> None:
+        samples = loader.get_frozen_eval_set(self._pool(), sample_limit=10, head_share=0.6)
+        heads = [sample for sample in samples if sample["subset"] == "head"]
+        tails = [sample for sample in samples if sample["subset"] == "tail"]
+        assert len(heads) == 6
+        assert len(tails) == 4
+        assert all(sample["ncm_code"] == "22071090" for sample in heads)
+        assert all(sample["ncm_code"] != "22071090" for sample in tails)
 
+    def test_conflicting_names_are_excluded_and_counted(self) -> None:
+        pool = self._pool()
+        # Mesmo nome em dois códigos: conflito → fora da amostra.
+        pool.append(loader.NCMItem(item_id=999, name="ITEM TAIL UM 0 BBB", ncm_code="22042100"))
+        samples = loader.get_frozen_eval_set(pool, sample_limit=10, head_share=0.6)
+        conflicting = [sample for sample in samples if sample["name"] == "ITEM TAIL UM 0 BBB"]
+        assert conflicting == []
 
-def test_format_system1_prompt_keeps_system_prefix_byte_identical_across_pairs() -> None:
-    first = format_system1_prompt("O gato dorme no sofá.", "O gato está dormindo.")
-    second = format_system1_prompt("A rua está molhada.", "Choveu ontem à noite.")
+    def test_raises_when_tail_pool_is_smaller_than_requested_share(self) -> None:
+        with pytest.raises(ValueError, match="tail pool"):
+            loader.get_frozen_eval_set(self._pool(), sample_limit=10, head_share=0.1)
 
-    assert first["system_prefix"] == second["system_prefix"]
-    assert first["system_prefix"] == SYSTEM1_SYSTEM_PREFIX
-
-
-def test_format_system1_prompt_embeds_texts_verbatim_inside_fixed_xml_markers() -> None:
-    payload = format_system1_prompt("O gato dorme no sofá.", "O gato está dormindo.")
-
-    assert payload["user_state"] == (
-        "<premise>\nO gato dorme no sofá.\n</premise>\n"
-        "<hypothesis>\nO gato está dormindo.\n</hypothesis>"
-    )
-    assert payload["choices"] == ["Entailment", "Contradiction"]
-
-
-def test_format_system1_prompt_rejects_non_string_or_blank_inputs() -> None:
-    invalid_values: list[Any] = ["", "   ", None, 123]
-    valid_premise = "premissa válida"
-
-    for invalid in invalid_values:
-        with pytest.raises(ValueError):
-            format_system1_prompt(invalid, valid_premise)
-        with pytest.raises(ValueError):
-            format_system1_prompt(valid_premise, invalid)
-
-
-def test_format_system1_prompt_rejects_texts_containing_reserved_xml_markers() -> None:
-    invalid_texts: list[Any] = [
-        "texto com </premise> injetado",
-        "texto com <premise> injetado",
-        "texto com </PREMISE> injetado",
-        "texto com </hypothesis> injetado",
-        "texto com <Hypothesis> injetado",
-    ]
-    valid_pair = "texto válido"
-
-    for invalid in invalid_texts:
-        with pytest.raises(ValueError, match="reserved XML markers"):
-            format_system1_prompt(invalid, valid_pair)
-        with pytest.raises(ValueError, match="reserved XML markers"):
-            format_system1_prompt(valid_pair, invalid)
+    def test_rejects_invalid_parameters(self) -> None:
+        pool = self._pool()
+        with pytest.raises(ValueError, match="sample_limit"):
+            loader.get_frozen_eval_set(pool, sample_limit=0)
+        with pytest.raises(ValueError, match="head_share"):
+            loader.get_frozen_eval_set(pool, sample_limit=10, head_share=1.0)
 
 
-def test_get_frozen_eval_set_returns_200_samples_balanced_100_and_100() -> None:
-    samples = get_frozen_eval_set()
+class TestTruncateCode:
+    def test_truncates_to_each_supported_granularity(self) -> None:
+        assert loader.truncate_code("22071090", 2) == "22"
+        assert loader.truncate_code("22071090", 4) == "2207"
+        assert loader.truncate_code("22071090", 6) == "220710"
+        assert loader.truncate_code("22071090", 8) == "22071090"
 
-    assert len(samples) == 200
-    label_counts = Counter(sample["label"] for sample in samples)
-    assert label_counts == Counter({"Entailment": 100, "Contradiction": 100})
-    expected_fields = {"id", "premise", "hypothesis", "label", "original_score"}
-    for sample in samples:
-        assert set(sample) == expected_fields
-
-
-def test_get_frozen_eval_set_is_bit_exact_across_repeated_calls_with_seed_42() -> None:
-    first_run = get_frozen_eval_set()
-    second_run = get_frozen_eval_set()
-
-    first_hash = hashlib.sha256(json.dumps(first_run, sort_keys=True).encode()).hexdigest()
-    second_hash = hashlib.sha256(json.dumps(second_run, sort_keys=True).encode()).hexdigest()
-    assert first_hash == second_hash
-
-
-def test_get_frozen_eval_set_rejects_odd_or_excessive_sample_limits() -> None:
-    with pytest.raises(ValueError, match="even"):
-        get_frozen_eval_set(sample_limit=201)
-
-    with pytest.raises(ValueError, match="1224"):
-        get_frozen_eval_set(sample_limit=2500)
+    def test_rejects_unsupported_granularity(self) -> None:
+        with pytest.raises(ValueError, match="digits"):
+            loader.truncate_code("22071090", 5)

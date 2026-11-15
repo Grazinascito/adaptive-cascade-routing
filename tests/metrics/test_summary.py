@@ -1,7 +1,7 @@
 """Testes das métricas puras do Componente G (src/metrics/summary.py).
 
 Funções puras: entradas e saídas são valores — nenhum mock é necessário.
-Corresponde às Stories 2 e 3 de docs/system2-evaluator-spec.md.
+Cobre subconjuntos head/tail e os gates novos do pivot NCM.
 """
 
 import statistics
@@ -9,7 +9,7 @@ from typing import cast
 
 import pytest
 
-from src.data.loader import Label
+from src.data.loader import Subset
 from src.metrics.summary import (
     BenchmarkResult,
     Scenario,
@@ -28,12 +28,13 @@ def _record(
     *,
     scenario: Scenario = "system1_pure",
     alpha: float | None = None,
+    subset: Subset = "head",
     total_latency_ms: float = 100.0,
     routed_to_system_2: bool = False,
     tokens_prefill: int = 0,
     tokens_decode: int = 0,
-    prediction: Label = "Entailment",
-    ground_truth: Label = "Entailment",
+    prediction: str = "22071090",
+    ground_truth: str = "22071090",
     system2_fallback_used: bool | None = None,
     json_valid: bool | None = None,
 ) -> BenchmarkResult:
@@ -42,6 +43,7 @@ def _record(
         scenario=scenario,
         alpha=alpha,
         replayed=False,
+        subset=subset,
         system_1_latency_ms=total_latency_ms,
         system_2_latency_ms=None,
         total_latency_ms=total_latency_ms,
@@ -64,6 +66,8 @@ def _summary(
     p95: float = 1000.0,
     tokens_decode_total: int = 1000,
     accuracy_value: float = 0.9,
+    accuracy_head: float | None = 0.95,
+    accuracy_tail: float | None = 0.6,
     apgr_value: float | None = None,
 ) -> SummaryReport:
     return SummaryReport(
@@ -75,6 +79,8 @@ def _summary(
         tokens_prefill_total=1000,
         tokens_decode_total=tokens_decode_total,
         accuracy=accuracy_value,
+        accuracy_head=accuracy_head,
+        accuracy_tail=accuracy_tail,
         f1_macro=accuracy_value,
         system2_call_rate=0.5,
         apgr=apgr_value,
@@ -103,17 +109,17 @@ def test_latency_percentiles_ms_rejects_short_samples_and_out_of_range_percentil
 
 
 def test_accuracy_and_macro_f1_handle_confusion_and_unpredicted_class() -> None:
-    predictions: list[Label] = ["Entailment", "Entailment", "Contradiction", "Entailment"]
-    ground_truths: list[Label] = ["Entailment", "Contradiction", "Contradiction", "Entailment"]
+    predictions = ["22071090", "22071090", "22042100", "22071090"]
+    ground_truths = ["22071090", "22042100", "22042100", "22071090"]
 
     assert accuracy(predictions, ground_truths) == pytest.approx(0.75)
-    # Entailment: tp=2 fp=1 fn=0 → F1 0.8; Contradiction: tp=1 fp=0 fn=1 → F1 2/3.
+    # 22071090: tp=2 fp=1 fn=0 → F1 0.8; 22042100: tp=1 fp=0 fn=1 → F1 2/3.
     assert macro_f1(predictions, ground_truths) == pytest.approx((0.8 + 2.0 / 3.0) / 2.0)
 
-    # Classe nunca prevista: Contradiction tem F1 0 sem divisão por zero.
-    only_entailment: list[Label] = ["Entailment", "Entailment", "Entailment"]
-    mixed_truth: list[Label] = ["Entailment", "Contradiction", "Entailment"]
-    assert macro_f1(only_entailment, mixed_truth) == pytest.approx(0.4)
+    # Classe nunca prevista tem F1 0 sem divisão por zero.
+    only_first = ["22071090", "22071090", "22071090"]
+    mixed_truth = ["22071090", "22042100", "22071090"]
+    assert macro_f1(only_first, mixed_truth) == pytest.approx(0.4)
 
 
 def test_apgr_recovers_gap_and_returns_zero_when_gap_is_zero() -> None:
@@ -132,8 +138,8 @@ def test_compute_summary_metrics_excludes_warmup_only_from_percentiles() -> None
             routed_to_system_2=query_id % 2 == 0,
             tokens_prefill=100,
             tokens_decode=50,
-            prediction="Entailment",
-            ground_truth="Entailment" if query_id < 4 else "Contradiction",
+            prediction="22071090",
+            ground_truth="22071090" if query_id < 4 else "22042100",
         )
         for query_id, latency in enumerate(latencies)
     ]
@@ -149,6 +155,22 @@ def test_compute_summary_metrics_excludes_warmup_only_from_percentiles() -> None
     assert report["tokens_prefill_total"] == 800
     assert report["tokens_decode_total"] == 400
     assert report["system2_call_rate"] == pytest.approx(0.5)
+
+
+def test_compute_summary_metrics_reports_head_and_tail_accuracy_separately() -> None:
+    records = [
+        _record(0, subset="head", prediction="22071090", ground_truth="22071090"),
+        _record(1, subset="head", prediction="22071090", ground_truth="22071090"),
+        _record(2, subset="head", prediction="22042100", ground_truth="22071090"),
+        _record(3, subset="tail", prediction="22042100", ground_truth="22071090"),
+        _record(4, subset="tail", prediction="33072010", ground_truth="33072010"),
+    ]
+
+    report = compute_summary_metrics(records, warmup_discard=0)
+
+    assert report["accuracy"] == pytest.approx(0.6)
+    assert report["accuracy_head"] == pytest.approx(2.0 / 3.0)
+    assert report["accuracy_tail"] == pytest.approx(0.5)
 
 
 def test_compute_summary_metrics_reports_json_success_rate_and_apgr_with_baselines() -> None:
@@ -182,18 +204,50 @@ def test_compute_summary_metrics_rejects_mixed_scenarios() -> None:
         )
 
 
-def test_evaluate_kpis_flags_each_threshold() -> None:
-    cascade = _summary(p95=250.0, tokens_decode_total=300, apgr_value=0.90)
-    system2 = _summary(p95=1000.0, tokens_decode_total=1000)
-    kpis = {"p95_reduction": 0.50, "token_savings": 0.60, "apgr_target": 0.95}
+def test_evaluate_kpis_flags_each_pivot_gate() -> None:
+    cascade = _summary(p95=250.0, tokens_decode_total=300, accuracy_tail=0.75)
+    system1 = _summary(accuracy_value=0.60, accuracy_head=0.65, accuracy_tail=0.50)
+    system2 = _summary(p95=1000.0, tokens_decode_total=1000, accuracy_tail=0.90)
+    kpis = {
+        "p95_reduction": 0.50,
+        "token_savings": 0.60,
+        "tail_gap_pp": 10,
+        "recovery_share": 0.50,
+    }
 
-    report = evaluate_kpis(cascade, system2, kpis)
+    report = evaluate_kpis(cascade, system1, system2, kpis)
 
     assert report["p95_reduction"] == (True, pytest.approx(0.75))
     assert report["token_savings"] == (True, pytest.approx(0.70))
-    assert report["apgr"] == (False, pytest.approx(0.90))
+    # Gap na cauda: (0.90 - 0.50) * 100 = 40 pp >= 10 → PASS.
+    assert report["tail_gap_pp"] == (True, pytest.approx(40.0))
+    # Recuperação: (0.75 - 0.50) / 0.40 = 0.625 >= 0.5 e cascata >= S1 → PASS.
+    assert report["recovery"] == (True, pytest.approx(0.625))
+
+
+def test_evaluate_kpis_fails_recovery_when_cascade_drops_below_system1_overall() -> None:
+    cascade = _summary(p95=250.0, tokens_decode_total=300, accuracy_value=0.55, accuracy_tail=0.75)
+    system1 = _summary(accuracy_value=0.60, accuracy_head=0.65, accuracy_tail=0.50)
+    system2 = _summary(p95=1000.0, tokens_decode_total=1000, accuracy_tail=0.90)
+    kpis = {"p95_reduction": 0.50, "token_savings": 0.60, "tail_gap_pp": 10, "recovery_share": 0.50}
+
+    report = evaluate_kpis(cascade, system1, system2, kpis)
+
+    # Recuperação na cauda é 0.625, mas a cascata (0.55) caiu abaixo do S1
+    # puro (0.60) no conjunto completo → FAIL.
+    assert report["recovery"] == (False, pytest.approx(0.625))
+
+
+def test_evaluate_kpis_requires_tail_accuracy_in_every_summary() -> None:
+    cascade = _summary()
+    system1 = _summary(accuracy_value=0.6, accuracy_tail=None)
+    system2 = _summary(p95=1000.0, tokens_decode_total=1000, accuracy_tail=0.9)
+    kpis = {"p95_reduction": 0.50, "token_savings": 0.60, "tail_gap_pp": 10, "recovery_share": 0.5}
+
+    with pytest.raises(ValueError, match="tail"):
+        evaluate_kpis(cascade, system1, system2, kpis)
 
     with pytest.raises(ValueError, match="p95"):
         broken = dict(system2)
         broken["latency_percentiles_ms"] = {"p95": 0.0}
-        evaluate_kpis(cascade, cast("SummaryReport", broken), kpis)
+        evaluate_kpis(cascade, system1, cast("SummaryReport", broken), kpis)

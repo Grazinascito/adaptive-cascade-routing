@@ -2,7 +2,6 @@
 
 O processo real nunca é lançado: `subprocess.Popen` é substituído por um spy
 e o health-check por respostas no limite da rede (httpx.MockTransport).
-Corresponde à Story 1 de docs/engine-router-spec.md.
 """
 
 import logging

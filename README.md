@@ -60,17 +60,29 @@ Full measurement — one Colab T4 session: open [`notebook/adaptive_cascade_benc
 
 ## Results
 
-**Measured or it didn't happen:** numbers appear in this section only from runs committed under `results/`. The per-item log (`raw_benchmark_data.json`) carries every field needed to audit them — predictions, `P_top`, entropy, routing decisions, latencies, token counts, per-scenario summaries, α sweep, and the three gates.
+**Measured or it didn't happen:** the numbers below come from the committed run in `results/raw_benchmark_data.json` (2026-11-15, Colab T4, `Qwen/Qwen3-4B-AWQ`, git `85a835f`, full run 13 min, 0 crashes, 0 parse failures, 1 fuzzy category match).
 
-| Metric | Value |
-|---|---|
-| SC-A / SC-B / SC-C accuracy (frozen test) | *pending first committed run* |
-| Tail-accuracy gap (SC-B − SC-A) | *pending* |
-| APGR at the validation-chosen α | *pending* |
-| Decode-token share (SC-C / SC-B) | *pending* |
-| Latency p50/p95/p99 per scenario | *pending* |
+| Metric | SC-A (System 1) | SC-B (System 2) | SC-C (cascade, α=0.90 from validation sweep) |
+|---|---|---|---|
+| Accuracy (frozen test, n=600) | **8.5%** | **48.2%** | **30.0%** |
+| Accuracy head / tail | 8.6% / 8.3% | 44.5% / 56.7% | 29.3% / 31.7% |
+| Decode tokens | 0 | 68,120 | 60,838 (89.3% of SC-B) |
+| Latency p50 | 450 ms | 3,733 ms | 4,205 ms |
+| Escalated to System 2 | — | 100% | 82.7% |
 
-A write-up in Brazilian Portuguese follows once the first run lands.
+**Gates: 2 of 3 passed.**
+
+| Gate | Required | Measured | Verdict |
+|---|---|---|---|
+| Tail-accuracy gap (SC-B − SC-A) | ≥ 10 pp | +48.3 pp | **PASS** |
+| Accuracy-gap recovery (APGR) | ≥ 0.5 | 0.542 | **PASS** |
+| Decode-token share (SC-C / SC-B) | ≤ 0.40 | 0.893 | **FAIL** |
+
+**Diagnosis (from the per-item log):** the cost gate failed because System 1's confidence signal carries no information. Its accuracy is flat at chance level (~8%, 12 classes) across *every* `P_top` bin — including the 106 items where it claimed `P_top ≥ 0.9` (accuracy there: 8.5%). The one-token letter-alias decision is confidently wrong, so the router escalates 83% of traffic (paying System 2 anyway) and accepts mostly-wrong answers on the rest. The cascade *machinery* is validated — the fast-path *instantiation* (single-token alias choice on a 4B model over 12 PT-BR retail categories) provides no usable signal. Candidate fix for the next iteration: score full category names as criteria instead of letter aliases.
+
+Secondary observation: System 2 is *better on the tail than on the head* (56.7% vs 44.5%) — abbreviated invoice-style names give chain-of-thought less distractor text (brands, sizes) to trip over.
+
+A write-up in Brazilian Portuguese follows.
 
 ## References
 

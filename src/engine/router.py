@@ -1,88 +1,33 @@
-"""EntropyEvaluator + CascadeRouter — softmax, entropia de Shannon e decisão de rota (α, RouteLLM).
+"""EntropyEvaluator + CascadeRouter — entropia de Shannon e decisão de rota (α, RouteLLM).
 
-Componentes D e E do design doc (docs/adaptive-cascade-design-doc.md §5.4 e §5.5);
-stories correspondentes em docs/engine-router-spec.md (Stories 3 e 4).
+Componentes D e E do design doc (docs/adaptive-cascade-design-doc.md §5.4 e
+§5.5); stories correspondentes em docs/engine-router-spec.md. Pós-pivot NCM
+(2026-11-14) não há mais pergunta `choice` binária: o sinal de incerteza do
+fast-path é a média geométrica dos logprobs dos tokens gerados (calculada em
+src/engine/system1.py) e a entropia de Shannon sobre os top-logprobs do
+primeiro token (função deste módulo). `softmax`/`compute_metrics` da era
+ASSIN foram removidos com o endpoint `/v1/systemone` — o histórico está no
+git (commit 79a8654 e anteriores).
 """
 
 import math
-from collections.abc import Callable, Mapping, Sequence
-from typing import Final, Literal, TypedDict
-
-from src.data.loader import Label
-
-LOGPROB_FLOOR: Final = -100.0
+from collections.abc import Callable, Mapping
+from typing import Literal, TypedDict
 
 
-def softmax(logprobs: Mapping[str, float], choices: Sequence[Label]) -> dict[Label, float]:
-    """Converte os logprobs dos rótulos de `choices` em probabilidades normalizadas.
-
-    Rótulos de `choices` ausentes em `logprobs` recebem `LOGPROB_FLOOR`; chaves de
-    `logprobs` fora de `choices` são ignoradas. A subtração do máximo antes de
-    `exp` evita overflow para logprobs grandes.
-    """
-    candidates = {choice: logprobs.get(choice, LOGPROB_FLOOR) for choice in choices}
-    top = max(candidates.values())
-    exps = {choice: math.exp(value - top) for choice, value in candidates.items()}
-    total = sum(exps.values())
-    return {choice: value / total for choice, value in exps.items()}
-
-
-def shannon_entropy(probabilities: Mapping[Label, float]) -> float:
+def shannon_entropy(probabilities: Mapping[str, float]) -> float:
     """Calcula a entropia de Shannon em bits; termos com p = 0 valem 0 por convenção."""
     return -sum(p * math.log2(p) for p in probabilities.values() if p > 0.0)
-
-
-class DecisionMetrics(TypedDict):
-    top_choice: Label
-
-    confidence: float
-
-    entropy: float
-
-    probabilities: dict[Label, float]
-
-
-def compute_metrics(logprobs: Mapping[str, float], choices: Sequence[Label]) -> DecisionMetrics:
-    """Componente D: métricas de incerteza sobre os logprobs dos rótulos candidatos.
-
-    Levanta `ValueError` se `choices` tiver menos de dois rótulos ou duplicatas,
-    se nenhum rótulo de `choices` aparecer em `logprobs` (nenhum sinal) ou se
-    algum logprob presente não for finito. Empates de probabilidade são
-    desfeitos pelo primeiro rótulo na ordem de `choices`.
-    """
-    if len(choices) < 2:
-        raise ValueError(f"choices must contain at least two labels, got {choices!r}")
-    if len(set(choices)) != len(choices):
-        raise ValueError(f"choices must not contain duplicate labels, got {choices!r}")
-
-    present = [choice for choice in choices if choice in logprobs]
-    if not present:
-        raise ValueError(f"no logprob signal for any of the choices {choices!r} in logprobs")
-    for choice in present:
-        if not math.isfinite(logprobs[choice]):
-            raise ValueError(f"logprob for {choice!r} must be finite, got {logprobs[choice]!r}")
-
-    probabilities = softmax(logprobs, choices)
-    confidence = max(probabilities.values())
-    top_choice = next(choice for choice in choices if probabilities[choice] == confidence)
-    return DecisionMetrics(
-        top_choice=top_choice,
-        confidence=confidence,
-        entropy=shannon_entropy(probabilities),
-        probabilities=probabilities,
-    )
 
 
 Route = Literal["SYSTEM_1", "SYSTEM_2"]
 
 
 class RoutingQuery(TypedDict):
-    premise: str
-
-    hypothesis: str
+    item_name: str
 
 
-System2Handler = Callable[[RoutingQuery], Label]
+System2Handler = Callable[[RoutingQuery], str]
 
 
 class RouteOutcome(TypedDict):
@@ -90,7 +35,7 @@ class RouteOutcome(TypedDict):
 
     routed_to_system_2: bool
 
-    system2_prediction: Label | None
+    system2_prediction: str | None
 
 
 def route(

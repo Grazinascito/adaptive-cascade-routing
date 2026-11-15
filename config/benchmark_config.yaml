@@ -1,13 +1,18 @@
-# Contrato congelado do benchmark.
-# Todo valor abaixo já está decidido nos docs; tests/test_config.py guarda
-# os valores críticos (seed, amostras, alpha, max_tokens) contra alteração acidental.
-# Referências ao README usam títulos de seção (âncoras estáveis), não números de linha.
+# Contrato congelado do benchmark (pós-pivot NCM, 2026-11-14).
+# Todo valor abaixo já está decidido em docs/dataset-pivot-ncm-spec.md;
+# tests/test_config.py guarda os valores críticos (seed, amostras, alpha,
+# max_tokens, composição head/tail) contra alteração acidental.
+# Referências ao README usam títulos de seção (âncoras estáveis), não números
+# de linha. A implementação ASSIN 2 está no histórico do git (commit 79a8654).
 
 dataset:
-  name: nilc-nlp/assin2          # README › "The 3 Evaluated Scenarios"
-  split: test
-  frozen_samples: 200            # conjunto congelado (README › "The 3 Evaluated Scenarios")
-  seed: 42                       # determinismo da amostragem
+  name: yurifacanha/NCM-RAFT-samall   # README › "The 3 Evaluated Scenarios"
+  split: train                        # dataset tem um único split (train)
+  frozen_samples: 800                 # conjunto congelado (spec › Story 3)
+  seed: 42                            # determinismo da amostragem
+  head_share: 0.65                    # ~65% cabeça / ~35% cauda (spec › Story 3)
+  head_min_code_freq: 50              # código head = >=50 ocorrências no pool limpo
+  label_digits: 8                     # granularidade do rótulo (sonda decide; 8 = item)
 
 model:
   id: Qwen/Qwen3-4B-AWQ           # README › "Running the vLLM Server & Benchmark"
@@ -19,7 +24,9 @@ serving:
   prefix_caching: true           # --enable-prefix-caching (README › "Running the vLLM Server & Benchmark")
 
 system1:
-  endpoint: /v1/systemone        # fast-path: decisão tipada; probabilidades por opção, sem max_tokens/logprobs no corpo (README › "The 3 Evaluated Scenarios")
+  endpoint: /v1/chat/completions # fast-path: geração curta do código NCM (spec › Decisão 1(d))
+  max_tokens: 12                 # 8 dígitos + margem; sem raciocínio
+  top_logprobs: 20               # base da confiança (média geométrica) e da entropia
 
 system2:
   endpoint: /v1/chat/completions # slow-path: CoT + JSON (README › "The 3 Evaluated Scenarios")
@@ -31,7 +38,8 @@ router:
 metrics:
   percentiles: [50, 95, 99]
 
-kpis:                            # critérios de sucesso (README › "Target Success Criteria (KPIs)")
-  p95_reduction: 0.50            # p95 da cascata >= 50% menor que System 2 Pure
-  token_savings: 0.60            # tokens decodificados >= 60% menores
-  apgr_target: 0.95              # recuperar >= 95% da diferença de acurácia
+kpis:                            # gates redefinidos (spec › Story 6, SC-A/B/C)
+  p95_reduction: 0.50            # SC-C: p95 da cascata >= 50% menor que System 2 Pure
+  token_savings: 0.60            # SC-C: tokens decodificados >= 60% menores
+  tail_gap_pp: 10                # SC-A: (acc S2 - acc S1) na cauda >= 10 pontos percentuais
+  recovery_share: 0.50           # SC-B: cascata recupera >= 50% do gap da cauda

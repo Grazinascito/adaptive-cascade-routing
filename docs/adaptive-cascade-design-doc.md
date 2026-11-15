@@ -11,12 +11,12 @@
 
 O **Adaptive Cascade Routing System** é um sistema de engenharia de inferência projetado para avaliar empiricamente a redução de latência e de custo financeiro no processamento de decisões semânticas em 3 cenários: **System 1 puro**, **System 2 puro** e **Cascata Adaptativa**. Inspirado na arquitetura de catálogo em grande escala do iFood (*Sugar, Revisor & Pepper*) e fundamentado na teoria de roteamento estatístico de modelos (*RouteLLM* / LMSYS / UC Berkeley), o sistema implementa um roteamento adaptativo entre duas estratégias de inferência executadas sobre a mesma infraestrutura de servidor em Português do Brasil (PT-BR):
 
-1. **System 1 (Fast-Path / Decisão Tipada)**: Utiliza a rota especializada `/v1/systemone` da engine `vLLM` com `--enable-prefix-caching`: declara uma pergunta `choice` cujos rótulos internos têm 1 token, e o servidor devolve as probabilidades por opção (softmax server-side) sem expor decodificação autorregressiva. Essa abordagem elimina a fase autorregressiva de *decode*, alcançando latências da ordem de dezenas de milissegundos.
+1. **System 1 (Fast-Path / Geração Curta)**: `/v1/chat/completions` com `max_tokens=12` e `temperature=0.0` sobre o servidor `vLLM` com `--enable-prefix-caching`: o modelo emite diretamente o código NCM de 8 dígitos, sem raciocínio. A confiança é a média geométrica das probabilidades dos tokens gerados ($\exp(\sum_i \ln p_i / n)$); código inexistente na taxonomia recebe confiança 0.0 e escala imediatamente — o "caso novo → fallback" do blog do iFood. (A pergunta `choice` do `/v1/systemone`, binária, caiu com o pivot: 114 classes não cabem em opções de 1 token; histórico no commit `79a8654`.)
 2. **System 2 (Slow-Path / Raciocínio Autorregressivo)**: Atua como mecanismo de *fallback* para requisições com alta incerteza estatística (alta entropia nos *logprobs* do System 1), utilizando o endpoint `/v1/chat/completions` para produzir raciocínio passo a passo (*Chain-of-Thought* - CoT) e saída estruturada em JSON.
 
 O sistema demonstra como a triagem de requisições por incerteza estatística permite recuperar mais de 95% da acurácia do modelo completo, enquanto reduz a latência p95 em mais de 50% e diminui o consumo total de tokens em mais de 60%, validando o princípio operacional do iFood de que *Tokens são dinheiro*.
 
-> **Registro de pivot (2026-11-14)**: a tese do projeto (os ganhos da arquitetura híbrida do iFood também aparecem no eixo System 1 × System 2 do mesmo modelo) exige dataset com cauda ambígua — o tipo de conteúdo que o blog do iFood descreve. O ASSIN 2 não tem esse conteúdo; a medição do Marco 1 provou (S1 puro 0,920 > S2 puro 0,865, cascata com 99,5% do tráfego no caminho barato). Decisão: trocar o dataset pela classificação de itens de catálogo em códigos **NCM** (taxonomia fiscal brasileira em árvore; branch `005-dataset-pivot-ncm`, spec em `docs/dataset-pivot-ncm-spec.md`). O ASSIN 2 sai da linha principal do relatório; a medição do Marco 1 permanece no histórico do git (commit `79a8654`). Até o merge dessa branch, as seções deste documento que citam o ASSIN 2 (RF-1, §2, §5.1, §5.3, §5.6) descrevem o estado implementado do Marco 1 e serão reescritas pela task do pivot.
+> **Registro de pivot (2026-11-14)**: a tese do projeto (os ganhos da arquitetura híbrida do iFood também aparecem no eixo System 1 × System 2 do mesmo modelo) exige dataset com cauda ambígua — o tipo de conteúdo que o blog do iFood descreve. O ASSIN 2 não tem esse conteúdo; a medição do Marco 1 provou (S1 puro 0,920 > S2 puro 0,865, cascata com 99,5% do tráfego no caminho barato). Decisão: trocar o dataset pela classificação de itens de catálogo em códigos **NCM** (taxonomia fiscal brasileira em árvore; branch `005-dataset-pivot-ncm`, spec em `docs/dataset-pivot-ncm-spec.md`). O ASSIN 2 sai da linha principal do relatório; a medição do Marco 1 permanece no histórico do git (commit `79a8654`). As seções abaixo já descrevem o estado pós-pivot.
 
 ---
 
@@ -26,7 +26,7 @@ Em sistemas de produção que operam em escala de milhões de requisições diá
 
 Conforme documentado nos artigos de engenharia do iFood (*Sugar, Revisor & Pepper* e *Tokens are money*), a sustentabilidade financeira de aplicações de IA Generativa requer decisões arquiteturais prévias à implementação dos prompts. O ecossistema do iFood utiliza o motor *Sugar* para resolver de 50% a 70% das classificações de catálogo com modelos mais leves e baratos, acionando modelos de alta capacidade apenas em casos ambíguos ou limítrofes.
 
-Este projeto estende essa filosofia ao construir um benchmark reprodutível em ambiente de recursos limitados (Google Colab com GPU NVIDIA T4 de 16GB VRAM), aplicando o endpoint `/v1/systemone` do `vLLM` integrado ao dataset público **ASSIN 2** (NLI em PT-BR) e respaldado pela formulação matemática de roteamento do **RouteLLM**.
+Este projeto estende essa filosofia ao construir um benchmark reprodutível em ambiente de recursos limitados (Google Colab com GPU NVIDIA T4 de 16GB VRAM), aplicando o mesmo servidor `vLLM` local aos dois modos de inferência, integrado ao dataset público **NCM-RAFT-samall** (classificação de itens de catálogo brasileiro em códigos da taxonomia fiscal NCM — nomes reais, ambíguos, com cauda *long tail*) e respaldado pela formulação matemática de roteamento do **RouteLLM**. O pivô de dataset (2026-11-14) substituiu o ASSIN 2 por falta de cauda ambígua; a primeira medição permanece no histórico (commit `79a8654`).
 
 ---
 
@@ -36,24 +36,24 @@ Este projeto estende essa filosofia ao construir um benchmark reprodutível em a
 
 #### Funcionais — o que o sistema faz
 
-- **RF-1.** O pipeline DEVE carregar o dataset **ASSIN 2** (`nilc-nlp/assin2`) e normalizar os pares de frases (Premissa e Hipótese) para uma tarefa de inferência textual binária (`Entailment` vs `Contradiction`).
+- **RF-1.** O pipeline DEVE carregar o dataset **NCM-RAFT-samall** (`yurifacanha/NCM-RAFT-samall`), parsear as conversas em pares (nome de item, código NCM de 8 dígitos) e amostrar o conjunto congelado de 800 itens (~65% cabeça / ~35% cauda por frequência de código, seed 42).
 - **RF-2.** O servidor `vLLM` DEVE ser inicializado com a flag `--enable-prefix-caching` para reutilizar o estado do *prefill* entre requisições com prompts de instrução idênticos.
-- **RF-3.** O motor System 1 DEVE disparar requisições ao endpoint `/v1/systemone` declarando uma pergunta `choice` com os rótulos candidatos no `criteria`; a resposta devolve as probabilidades por opção (softmax do servidor sobre rótulos de 1 token), que o motor converte em logprobs $\ln(P)$.
-- **RF-4.** O módulo de avaliação estatística DEVE calcular a probabilidade da resposta de topo $P_{\text{top}}$ e a entropia de Shannon $H(P)$ sobre os rótulos permitidos.
+- **RF-3.** O motor System 1 DEVE disparar requisições ao `/v1/chat/completions` com `max_tokens=12`, `logprobs` e `top_logprobs`, produzindo o código NCM sem raciocínio; código fora da taxonomia implica confiança 0.0.
+- **RF-4.** O módulo de avaliação estatística DEVE calcular a confiança como média geométrica das probabilidades dos tokens gerados e a entropia de Shannon $H(P)$ sobre os top-logprobs do primeiro token.
 - **RF-5.** O roteador adaptativo DEVE tomar a decisão de roteamento baseada em um limiar configurável $\alpha$: aceitar a resposta do System 1 se $P_{\text{top}} \ge \alpha$, ou rotear para o System 2 se $P_{\text{top}} < \alpha$.
 - **RF-6.** O motor System 2 DEVE processar os casos desviados gerando raciocínio *Chain-of-Thought* (CoT) e JSON validado com o rótulo final.
-- **RF-7.** O harness de benchmarking DEVE medir e registrar a latência por requisição ($p50$, $p95$, $p99$), a contagem total de tokens (*prefill* vs *decode*) e as métricas de qualidade (Acurácia, F1-Score e *Average Performance Gap Recovered* - APGR) nos cenários: *System 1 Puro*, *System 2 Puro* e *Cascata Adaptativa*.
+- **RF-7.** O harness de benchmarking DEVE medir e registrar a latência por requisição ($p50$, $p95$, $p99$), a contagem total de tokens (*prefill* vs *decode*, somando os engines invocados) e as métricas de qualidade (Acurácia geral e por subconjunto cabeça/cauda, F1-Score macro e APGR informativo) nos cenários: *System 1 Puro*, *System 2 Puro* e *Cascata Adaptativa*.
 
 #### Não-funcionais — como o sistema faz
 
 - **Desempenho e Latência**
-  - **RNF-01.** A latência p95 da Cascata Adaptativa DEVE ser pelo menos 50% menor que a latência p95 do System 2 Puro. *(Por quê: validar a redução de tempo em produção.)* *(Teste: medição via `time.perf_counter()` em 200 requisições do conjunto de teste ASSIN 2.)*
+  - **RNF-01.** A latência p95 da Cascata Adaptativa DEVE ser pelo menos 50% menor que a latência p95 do System 2 Puro. *(Por quê: validar a redução de tempo em produção.)* *(Teste: medição via `time.perf_counter()` nas 800 requisições do conjunto congelado NCM.)*
 - **Custo Computacional**
   - **RNF-02.** O volume de tokens gerados na fase de *decode* da Cascata Adaptativa DEVE ser reduzido em no mínimo 60% em relação ao System 2. *(Por quê: demonstrar economia direta de recursos segundo o princípio "Tokens are money".)* *(Teste: auditoria de tokens consumidos registrada pelo vLLM.)*
 - **Reprodutibilidade**
   - **RNF-03.** Todo o pipeline de inferência e benchmark DEVE ser executável em uma instância gratuita do Google Colab com GPU NVIDIA T4 (16GB VRAM) sem requerer APIs pagas externas. *(Por quê: garantia de acesso e validação pública no GitHub.)* *(Teste: execução autônoma do notebook Colab do início ao fim.)*
 - **Observabilidade**
-  - **RNF-04.** O sistema DEVE gerar registros estruturados por requisição (`BenchmarkResult`, Componente G) contendo `query_id`, `system_1_latency_ms`, `confidence`, `entropy`, `routed_to_system_2`, `system_2_latency_ms`, `total_latency_ms`, `prediction`, `ground_truth`, `is_correct`, tokens de prefill/decode e flags de fallback do parser/erro HTTP. *(Por quê: permitir análise posterior de dispersão e calibragem de limiar.)*
+  - **RNF-04.** O sistema DEVE gerar registros estruturados por requisição (`BenchmarkResult`, Componente G) contendo `query_id`, `subset` (cabeça/cauda), `system_1_latency_ms`, `confidence`, `entropy`, `routed_to_system_2`, `system_2_latency_ms`, `total_latency_ms`, `prediction`, `ground_truth`, `is_correct`, tokens de prefill/decode (somados dos engines invocados) e flags de fallback do parser/erro HTTP. *(Por quê: permitir análise posterior de dispersão e calibragem de limiar.)*
 
 ### 3.2 Non-Goals
 
@@ -71,15 +71,15 @@ O sistema é estruturado em quatro camadas operacionais independentes: Ingestão
 
 #### Nível 1 — Contexto do Sistema (C4 Context)
 
-O sistema interage com o avaliador/engenheiro de IA através do carregamento do dataset ASSIN 2, executando requisições no servidor `vLLM` local (GPU T4) e exportando as métricas de latência, custo de tokens e acurácia.
+O sistema interage com o avaliador/engenheiro de IA através do carregamento do dataset NCM-RAFT-samall, executando requisições no servidor `vLLM` local (GPU T4) e exportando as métricas de latência, custo de tokens e acurácia.
 
 #### Nível 2 — Contêineres e Componentes (C4 Container)
 
 O sistema opera dentro do ambiente Linux/CUDA da GPU NVIDIA T4 no Google Colab, contendo os seguintes componentes internos:
 
-- **Dataset Loader & Formatter**: Consome o dataset ASSIN 2 do Hugging Face Hub e constrói o prompt tipado para o vLLM.
-- **vLLM Serving Engine**: Servidor local de inferência em GPU T4 que carrega o modelo quantizado AWQ e disponibiliza os endpoints `/v1/systemone` e `/v1/chat/completions`.
-- **System 1 Engine**: Módulo que faz perguntas `choice` ao `/v1/systemone`, consumindo as probabilidades por opção devolvidas pelo servidor.
+- **Dataset Loader & Taxonomy**: Consome o dataset NCM-RAFT-samall do Hugging Face Hub, parseia os pares (item, código) e valida contra a taxonomia commitada.
+- **vLLM Serving Engine**: Servidor local de inferência em GPU T4 que carrega o modelo quantizado AWQ e disponibiliza o endpoint `/v1/chat/completions` (com logprobs por token) para os dois modos.
+- **System 1 Engine**: Módulo de geração curta do código NCM com confiança pela média geométrica dos logprobs.
 - **Confidence & Entropy Evaluator**: Componente matemático que calcula a probabilidade normalizada e a entropia dos logits.
 - **Cascade Router**: Roteador estatístico que decide a transferência de execução para o System 2.
 - **System 2 Engine**: Módulo autorregressivo de *fallback* para raciocínio estruturado (CoT + JSON Schema).
@@ -87,9 +87,9 @@ O sistema opera dentro do ambiente Linux/CUDA da GPU NVIDIA T4 no Google Colab, 
 
 #### Componentes Principais e Responsabilidades
 
-- **`DatasetLoader`** → Carrega, filtra e formata o dataset ASSIN 2 em pares de entrada estruturados.
+- **`DatasetLoader`** → Carrega, parseia e amostra o pool NCM em pares (item, código) estruturados.
 - **`vLLMServerManager`** → Gerencia o ciclo de vida e a inicialização do processo servidor `vLLM` em background.
-- **`System1Engine`** → Executa chamadas tipadas no endpoint `/v1/systemone` (pergunta `choice`; probabilidades por opção).
+- **`System1Engine`** → Executa a geração curta do código NCM e deriva confiança/entropia dos logprobs.
 - **`EntropyEvaluator`** → Processa o dicionário de *logprobs* e retorna a distribuição de probabilidade normalizada e a entropia de Shannon.
 - **`CascadeRouter`** → Compara a confiança estimada com o limiar $\alpha$ e decide a rota.
 - **`System2Engine`** → Invoca o endpoint `/v1/chat/completions` com prompts de *Chain-of-Thought*.
@@ -110,23 +110,25 @@ adaptive-cascade-routing/
 ├── requirements-colab.txt         # Core + vLLM exportadas do uv.lock (para o Colab)
 ├── uv.lock                        # Lockfile commitado (reprodutibilidade do benchmark)
 ├── config/
-│   └── benchmark_config.yaml      # Parâmetros de modelo, limiares de confiança e portas do vLLM
+│   ├── benchmark_config.yaml      # Parâmetros de modelo, limiares de confiança e portas do vLLM
+│   └── ncm_taxonomy.csv           # Taxonomia NCM derivada do dataset (114 códigos, 19 capítulos)
 ├── docs/
 │   ├── adaptive-cascade-design-doc.md   # Este documento
-│   ├── dataset-loader-spec.md           # Stories do Componente A
-│   ├── engine-router-spec.md            # Stories dos Componentes B–E
-│   ├── system2-evaluator-spec.md        # Stories dos Componentes F–G
+│   ├── dataset-pivot-ncm-spec.md        # Spec do pivot (Stories 1–6, gates SC-A/B/C)
+│   ├── dataset-loader-spec.md           # Stories do Componente A (NCM)
+│   ├── engine-router-spec.md            # Stories dos Componentes B–E (NCM)
+│   ├── system2-evaluator-spec.md        # Stories dos Componentes F–G (NCM)
 │   └── adr/                             # Registros de decisão de arquitetura
 ├── src/
 │   ├── __init__.py
 │   ├── data/
 │   │   ├── __init__.py
-│   │   └── loader.py              # Ingestão e formatação do dataset ASSIN 2
+│   │   └── loader.py              # Parser NCM, taxonomia e amostragem congelada head/tail
 │   ├── engine/
 │   │   ├── __init__.py
 │   │   ├── server.py              # Ciclo de vida do servidor vLLM (vLLMServerManager, §5.2)
-│   │   ├── system1.py             # Interface com /v1/systemone e extração de logprobs
-│   │   ├── system2.py             # Interface com /v1/chat/completions (CoT + JSON)
+│   │   ├── system1.py             # Geração curta do código NCM com confiança por logprobs
+│   │   ├── system2.py             # Interface com /v1/chat/completions (CoT + JSON NCM)
 │   │   └── router.py              # Lógica do Roteador de Cascata e cálculo de entropia
 │   └── metrics/
 │       ├── __init__.py
@@ -146,18 +148,19 @@ adaptive-cascade-routing/
 
 ## 5. Detailed Design
 
-### 5.1 Component A: Dataset Pipeline & Prompt Formatter (`loader.py`)
+### 5.1 Component A: Dataset Pipeline NCM (`loader.py`)
 
-- **Scope & Responsibility**: Carregar as amostras de teste do dataset ASSIN 2, extrair os campos `premise`, `hypothesis` e `entailment_judgment`, e formatar o estado base (*prompt*) otimizado para reutilização de prefixo no KV cache do vLLM.
+- **Scope & Responsibility**: Carregar o pool do dataset NCM-RAFT-samall, parsear as conversas em pares (nome, código), validar códigos contra a taxonomia commitada e amostrar o conjunto congelado head/tail.
 - **Interfaces & Contracts**:
-  - `load_assin2_raw_split(split: str = "test") -> list[ASSIN2Sample]`
-  - `normalize_label(raw: str) -> str`
-  - `format_system1_prompt(premise: str, hypothesis: str) -> FormattedPromptPayload`
-  - `get_frozen_eval_set(split: str = "test", sample_limit: int = 200, seed: int = 42) -> list[ASSIN2Sample]`
-- **Dependencies**: Biblioteca `datasets` do Hugging Face.
+  - `load_ncm_pool(dataset_id: str = NCM_DATASET_ID) -> tuple[list[NCMItem], int]`
+  - `parse_conversation(conversations) -> NCMItem | None`
+  - `load_taxonomy() -> dict[str, NCMTaxonomyEntry]`; `is_valid_code(code, taxonomy=None) -> bool`; `chapter_lines() -> list[str]`
+  - `get_frozen_eval_set(items, *, sample_limit=800, head_share=0.65, head_min_code_freq=50, seed=42) -> list[NCMEvalSample]`
+  - `pool_stats(items, n_rows) -> PoolStats`; `truncate_code(code, digits) -> str`
+- **Dependencies**: Biblioteca `datasets` do Hugging Face; `config/ncm_taxonomy.csv` (derivado do próprio dataset: 114 códigos, 19 capítulos, descrição única por código).
 - **Core Logic**:
-  1. Converte o rótulo original do ASSIN 2 (`NONE` -> `Contradiction`, `ENTAILMENT` -> `Entailment`).
-  2. Constrói a mensagem do sistema e o contexto da premissa como prefixo estático para alavancar `--enable-prefix-caching`.
+  1. Extrai o par canônico da PRIMEIRA mensagem da conversa (`o codigo da categoria do {nome} é: {código}`); resposta do assistente é ignorada (às vezes traz código, às vezes só descrição).
+  2. Amostragem: dedup de pares → exclusão de nomes conflitantes (mesmo nome, códigos diferentes) → frequência por código sobre pares únicos → head = >= 50 nomes únicos → estratificação 65/35 com seed 42.
 
 ### 5.2 Component B: vLLM Serving Infrastructure (`vLLMServerManager`)
 
@@ -171,36 +174,36 @@ adaptive-cascade-routing/
   1. Dispara a linha de comando do servidor com argumentos de otimização (`--model Qwen/Qwen3-4B-AWQ --quantization awq --enable-prefix-caching --gpu-memory-utilization 0.90 --logprobs-mode raw_logprobs`); reusa um servidor já saudável sem lançar novo processo.
   2. Executa polling do endpoint de health do vLLM até receber resposta HTTP 200 dentro do timeout de startup.
 
-### 5.3 Component C: System 1 Typed Decision Engine (`system1.py`)
+### 5.3 Component C: System 1 Short Classification Engine (`system1.py`)
 
-- **Scope & Responsibility**: Realizar a chamada de baixíssima latência ao endpoint especializado `/v1/systemone` do vLLM (Structured Decisions API) e derivar as métricas de decisão das probabilidades por opção.
+- **Scope & Responsibility**: Executar o fast-path — geração curta (sem raciocínio) do código NCM com confiança derivada dos logprobs por token.
 - **Interfaces & Contracts**:
-  - `evaluate_typed_decision(state: str, choices: Sequence[Label], *, model: str = DEFAULT_MODEL, base_url: str = "http://127.0.0.1:8000/v1", instructions: str = SYSTEM1_SYSTEM_PREFIX, timeout_s: float = 10.0, client: httpx.Client | None = None) -> System1Output`
+  - `evaluate_short_classification(item_name: str, *, model=DEFAULT_MODEL, base_url=DEFAULT_BASE_URL, instructions=SYSTEM1_INSTRUCTIONS, max_tokens=12, top_logprobs=20, temperature=0.0, timeout_s=10.0, client=None) -> System1Output`
 - **Data Models** (TypedDict, no padrão do repo):
   ```python
   class System1Output(TypedDict):
-      top_choice: Label
-      top_probability: float
-      logprobs: dict[str, float]
-      probabilities: dict[Label, float]
-      entropy: float
+      code: str  # sentinela "00000000" quando não há código parseável
+      confidence: float  # média geométrica dos token probs; 0.0 se inválido
+      entropy: float  # Shannon sobre top-logprobs do primeiro token
+      valid_code: bool
+      prompt_tokens: int
+      completion_tokens: int
       latency_ms: float
   ```
 - **Core Logic**:
-  1. Envia a requisição HTTP POST para o endpoint `/v1/systemone` com o corpo declarando uma pergunta `choice` (`criteria` = `{"Entailment": null, "Contradiction": null}`), o par NLI no `state` e o prompt fixo no `instructions` de topo (idêntico em toda query, para o prefix caching). Campos desconhecidos no corpo recebem HTTP 400 — `max_tokens`/`logprobs`/`choices` não existem nesta API.
-  2. Converte as `probabilities` por opção da resposta em logprobs $\ln(P)$ (opção ausente ou com probabilidade 0 fica de fora e recebe `LOGPROB_FLOOR` via `compute_metrics`) e monta o `System1Output` com as métricas do Componente D.
+  1. POST `/v1/chat/completions` com mensagem `system` fixa (instrução + lista de capítulos, idêntica em toda query para o prefix caching) e `user` = nome do item; `enable_thinking=False` (Qwen3 pensa por padrão).
+  2. Extrai o código via regex `\b\d{8}\b`; confiança = $\exp(\sum_i \ln p_i / n)$ sobre os tokens gerados; código inexistente na taxonomia → `valid_code=False` e confiança 0.0 (escala em qualquer α > 0).
 
-### 5.4 Component D: Confidence & Entropy Evaluator (`router.py`)
+### 5.4 Component D: Uncertainty Signals (`router.py` + `system1.py`)
 
-- **Scope & Responsibility**: Calcular a distribuição de probabilidades normalizada via Softmax e calcular a Entropia de Shannon sobre os rótulos de interesse.
+- **Scope & Responsibility**: Produzir os sinais de incerteza que alimentam o roteador.
 - **Mathematical Formulations** (International Standard):
-  1. **Logprobs to Probability via Softmax**:
-     Given logits or log-probabilities $l_i = \ln(P(y_i \mid x))$ for choices $i \in \{1, \dots, K\}$:
-     $$P(y_k \mid x) = \frac{\exp(l_k)}{\sum_{j=1}^{K} \exp(l_j)}$$
-  2. **Shannon Entropy**:
+  1. **Confidence (geometric mean of generated-token probabilities)**:
+     $$\text{Confidence}(x) = \exp\!\Big(\frac{1}{n}\sum_{i=1}^{n} \ln p_i\Big)$$
+     (menos punitiva que o produto puro em códigos de 8 dígitos)
+  2. **Shannon Entropy** (sobre a distribuição top-logprobs do primeiro token, normalizada):
      $$\text{Entropy}(P) = -\sum_{k=1}^{K} P(y_k \mid x) \log_2 P(y_k \mid x)$$
-  3. **Top Confidence**:
-     $$\text{Confidence}(x) = \max_{k} P(y_k \mid x)$$
+  3. `softmax`/`compute_metrics` da era `/v1/systemone` foram removidos (sem chamador pós-pivot; histórico no commit `79a8654`).
 
 ### 5.5 Component E: Adaptive Cascade Router (`CascadeRouter`)
 
@@ -216,32 +219,38 @@ adaptive-cascade-routing/
 
 - **Scope & Responsibility**: Processar casos limítrofes e ambíguos gerando raciocínio em múltiplos tokens e JSON estruturado.
 - **Interfaces & Contracts**:
-  - `execute_reasoning(premise: str, hypothesis: str, *, model: str = DEFAULT_MODEL, base_url: str = "http://127.0.0.1:8000/v1", max_tokens: int = 256, temperature: float = 0.0, timeout_s: float = 120.0, client: httpx.Client | None = None) -> System2Output`
-  - `System2Output` (TypedDict): `reasoning`, `label`, `prompt_tokens`, `completion_tokens`, `latency_ms`, `fallback_used`
+  - `execute_reasoning(item_name: str, *, model: str = DEFAULT_MODEL, base_url: str = "http://127.0.0.1:8000/v1", max_tokens: int = 256, temperature: float = 0.0, timeout_s: float = 120.0, client: httpx.Client | None = None) -> System2Output`
+  - `System2Output` (TypedDict): `reasoning`, `ncm_code`, `prompt_tokens`, `completion_tokens`, `latency_ms`, `fallback_used`
   - O payload inclui `chat_template_kwargs: {"enable_thinking": false}` — modelos Qwen3 "originais" pensam por padrão e os blocos `<think>` quebrariam o parse do JSON
 - **Prompt Architecture**:
   ```text
-  Analise o par de frases abaixo e forneça o raciocínio passo a passo (Chain-of-Thought) antes de determinar o rótulo final.
+  Você é um especialista em classificação fiscal de mercadorias (NCM — Nomenclatura
+  Comum do Mercosul). Analise o nome do item de catálogo abaixo e forneça o
+  raciocínio passo a passo (Chain-of-Thought) antes de determinar o código NCM de
+  8 dígitos.
 
-  Premissa: {premise}
-  Hipótese: {hypothesis}
+  Capítulos disponíveis neste catálogo:
+  {lista compacta dos 19 capítulos}
+
+  Item: {item_name}
 
   Retorne um JSON estrito no seguinte formato:
   {
     "reasoning": "Explicação detalhada...",
-    "label": "Entailment" | "Contradiction"
+    "ncm_code": "12345678"
   }
   ```
-- **Error Handling**: Se a resposta não cumprir o schema JSON esperado, faz a extração de rótulo via regex como plano de contingência (*degradation*), marcando `fallback_used=True`; output vazio ou sem rótulo reconhecido retorna o default `Contradiction` com `fallback_used=True` e warning no log.
+- **Error Handling**: Se a resposta não cumprir o schema JSON esperado, faz a extração de código via regex `\b\d{8}\b` como plano de contingência (*degradation*), marcando `fallback_used=True`; output vazio ou sem código reconhecido retorna o default `00000000` (sempre errado na avaliação, nunca derruba o run) com `fallback_used=True` e warning no log.
 
 ### 5.7 Component G: Benchmark & Performance Evaluation Harness (`evaluator.py`)
 
 - **Scope & Responsibility**: Medir o desempenho de tempo e custo de forma rigorosa em todas as amostras do benchmark. Tipos e métricas puras vivem em `summary.py`; a orquestração (3 cenários, sweep de α, artefatos, CLI) em `evaluator.py`.
 - **Metrics Calculated**:
   - **Latência**: $p50$, $p95$, $p99$ medidos via `time.perf_counter()` em milissegundos. As 5 primeiras requisições de cada cenário são descartadas dos percentis (*warmup*; §10, risco 2) — acurácia, tokens e taxas usam todas as requisições.
-  - **Tokens**: Total de tokens de prefill e de decode (obtidos do `usage` do `/v1/chat/completions`). O `/v1/systemone` não devolve `usage`, então requisições atendidas só pelo System 1 registram 0 — o KPI de decode tokens compara apenas chamadas do System 2.
-  - **Acurácia & F1-Score**: Comparação com os rótulos de *ground truth* do ASSIN 2 (F1 macro sobre as duas classes).
-  - **Average Performance Gap Recovered (APGR)**:
+  - **Tokens**: Total de tokens de prefill e de decode somando os engines invocados por requisição (o fast-path também custa tokens — "tokens are money"). O KPI de economia compara a cascata contra o System 2 puro.
+  - **Acurácia & F1-Score**: Comparação com o código NCM anotado, truncado por `label_digits` (granularidade congelada pela sonda) de forma idêntica em predição e ground truth; F1 macro sobre os códigos presentes. Acurácia reportada geral E por subconjunto cabeça/cauda.
+  - **Gates do pivot (SC-A/B/C)**: SC-A = gap S2−S1 na cauda >= 10 pp; SC-B = cascata recupera >= 50% do gap sem cair abaixo do S1 geral; SC-C = p95 e decode tokens >= 50%/60% menores que o S2 puro. Taxa de fallback no α ótimo comparada à banda 30–50% do blog do iFood. Gate anti-degeneração: aviso quando > 95% dos itens têm confiança >= 0,95.
+  - **Average Performance Gap Recovered (APGR)** (informativo pós-pivot):
     $$\text{APGR}(\alpha) = \frac{\text{Accuracy}(\text{Cascade}_\alpha) - \text{Accuracy}(\text{System 1})}{\text{Accuracy}(\text{System 2}) - \text{Accuracy}(\text{System 1})}$$
     Denominador zero (acurácias de S1 e S2 iguais) devolve 0.0, sem divisão por zero.
 
@@ -249,7 +258,7 @@ adaptive-cascade-routing/
 
 ## 6. Security & Compliance
 
-- **Privacidade de Dados**: O benchmark utiliza exclusivamente o dataset público **ASSIN 2**, isento de informações pessoais identificáveis (PII) ou dados sensíveis de produção.
+- **Privacidade de Dados**: O benchmark utiliza exclusivamente o dataset público **NCM-RAFT-samall** (nomes comerciais de itens de catálogo e códigos fiscais), isento de informações pessoais identificáveis (PII) ou dados sensíveis de produção. Procedência: autoria única, card vazio — risco de ruído declarado no README e mitigado pela revisão humana da amostra (HITL da spec do pivot).
 - **Execução Air-Gapped**: Todo o processamento de inferência ocorre dentro do ambiente do Google Colab no servidor local `127.0.0.1:8000`, sem envio de prompts para APIs de terceiros.
 - **Governança de Código Aberto**: Uso de modelos de licença aberta no Hugging Face (Qwen / Gemma) em conformidade com as diretrizes de uso responsável.
 
@@ -265,11 +274,13 @@ adaptive-cascade-routing/
 ## 8. Testing Strategy
 
 - **Testes Unitários**:
-  - Validação da função `format_system1_prompt` com entradas sintéticas.
-  - Validação da fórmula de Softmax e cálculo de Entropia com distribuições conhecidas (ex: distribuição uniforme $H(P) = 1.0$ bit vs distribuição determinística $H(P) = 0.0$ bit).
-  - Validação da lógica do `CascadeRouter` nos limiares limite $\alpha=0.0$ e $\alpha=1.0$.
+  - Parser do NCM-RAFT com stubs no formato real das conversas (incluindo falhas de extração contadas).
+  - Taxonomia: códigos duplicados/vazios rejeitados; `is_valid_code` contra códigos conhecidos/desconhecidos.
+  - Amostragem congelada determinística (seed 42), proporções head/tail e exclusão de conflitos.
+  - Engines com `httpx.MockTransport` no limite da rede: confiança geométrica analítica, confiança 0 para código fora da taxonomia, cadeia de fallback JSON → regex → sentinela.
+  - Validação da lógica do `CascadeRouter` nos limiares limite $\alpha=0.0$ e $\alpha=1.0$ e da entropia de Shannon com distribuições conhecidas (uniforme $H(P) = 1.0$ bit vs determinística $H(P) = 0.0$ bit).
 - **Teste de Integração (Frozen Eval Set)**:
-  - Execução da bateria completa sobre o conjunto congelado de 200 amostras do ASSIN 2 Test Split, salvando os resultados brutos em `results/raw_benchmark_data.json`.
+  - Execução da bateria completa sobre o conjunto congelado de 800 amostras head/tail do pool NCM, salvando os resultados brutos em `results/raw_benchmark_data.json`.
 
 ---
 
@@ -291,7 +302,7 @@ adaptive-cascade-routing/
 ## 10. Dependencies, Risks & Open Questions
 
 ### Dependências Externas
-- `vLLM` com suporte a CUDA 12 e endpoint `/v1/systemone`.
+- `vLLM` com suporte a CUDA 12 e `logprobs`/`top_logprobs` no endpoint `/v1/chat/completions`.
 - Instância de GPU NVIDIA T4 no Google Colab.
 
 ### Riscos e Mitigações
@@ -311,6 +322,7 @@ adaptive-cascade-routing/
 1. **iFood Engineering Blog**: *Tokens are money: a strategic guide to cost optimization in LLMs*. (2024).
 2. **iFood Engineering Blog**: *Sugar, Revisor, and Pepper: the agentic cycle that maintains iFood's catalog scale and consistency*. (2024).
 3. **UC Berkeley & LMSYS (RouteLLM)**: Ong, L., et al. *RouteLLM: Learning to Route LLMs with Preference Data*. arXiv:2406.18665 (2024).
-4. **vLLM Documentation**: *Structured Decisions and /v1/systemone Endpoint*. Version 0.32.0.
-5. **NILC USP / Hugging Face**: *ASSIN 2: Brazilian Portuguese Natural Language Inference Dataset*. (2020).
+4. **vLLM Documentation**: *OpenAI-Compatible Server: Chat Completions logprobs*. Version 0.32.0.
+5. **Hugging Face**: *yurifacanha/NCM-RAFT-samall — NCM classification dataset (PT-BR)*. (2024).
+6. **NILC USP / Hugging Face**: *ASSIN 2: Brazilian Portuguese NLI Dataset*. (2020) — dataset da primeira iteração (histórico, commit `79a8654`).
 6. **Nadir**: *FrugalGPT Cascade Routing: A Step-by-Step Implementation*. (2024).

@@ -1,124 +1,158 @@
-"""System1Engine — decisão tipada de 1 token no endpoint /v1/systemone do vLLM.
+"""System1Engine — classificação NCM em geração curta com confiança por logprobs.
 
-Componente C do design doc (docs/adaptive-cascade-design-doc.md §5.3);
-stories correspondentes em docs/engine-router-spec.md (Story 2). O endpoint
-é o Structured Decisions API do vLLM (>= 0.32.0): a request declara a
-pergunta `choice` com as opções em `criteria` e a resposta já traz as
-probabilidades por opção (softmax do servidor); o engine converte para
-ln(P) e delega as métricas ao `compute_metrics` (Componente D).
+Pivot NCM (2026-11-14), Decisão 1(d) da spec docs/dataset-pivot-ncm-spec.md:
+com 114 códigos candidatos, a pergunta `choice` binária do `/v1/systemone`
+não se aplica; o fast-path passa a ser uma chamada `/v1/chat/completions`
+com `max_tokens` curto (12), sem raciocínio, produzindo o código de 8
+dígitos. A confiança é a média geométrica das probabilidades dos tokens
+gerados — exp(Σ ln p / n), menos punitiva que o produto puro em códigos de
+8 dígitos — e código inexistente na taxonomia vira confiança 0.0 (escala
+imediatamente, espelhando o "caso novo → fallback" do blog do iFood). A
+implementação anterior (`/v1/systemone`) permanece no histórico do git.
 """
 
 import math
+import re
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, TypedDict, get_args
+from typing import Final, TypedDict
 
 import httpx
 
-from src.data.loader import SYSTEM1_SYSTEM_PREFIX, Label
-from src.engine.router import compute_metrics
+from src.data.loader import chapter_lines, is_valid_code
+from src.engine.router import shannon_entropy
 from src.engine.serving import DEFAULT_BASE_URL, DEFAULT_MODEL, post_json
 
-QUESTION_ID: Final = "nli_label"
-QUESTION_INSTRUCTIONS: Final = (
-    "Does the premise entail the hypothesis? Choose exactly one of the allowed options."
+NCM_CODE_PATTERN: Final = re.compile(r"\b(\d{8})\b")
+
+DEFAULT_MAX_TOKENS: Final = 12
+DEFAULT_TOP_LOGPROBS: Final = 20
+
+INVALID_CODE_SENTINEL: Final = "00000000"
+
+SYSTEM1_INSTRUCTIONS: Final = (
+    "Você é um classificador de itens de catálogo brasileiro.\n"
+    "Receba o nome de um item e responda com o código NCM de 8 dígitos "
+    "correspondente, de acordo com a Nomenclatura Comum do Mercosul.\n"
+    "Capítulos disponíveis neste catálogo:\n"
+    + "\n".join(chapter_lines())
+    + "\nResponda apenas com o código de 8 dígitos, sem texto adicional."
 )
 
 
 class System1Output(TypedDict):
-    top_choice: Label
+    """Saída do fast-path NCM.
 
-    top_probability: float
+    `code` é `INVALID_CODE_SENTINEL` quando a resposta não contém código de
+    8 dígitos; nesse caso `valid_code=False` e `confidence=0.0` (escala ao
+    System 2). `entropy` é a entropia de Shannon sobre a distribuição
+    top-logprobs do primeiro token gerado — o ponto onde o modelo "decide"
+    o início do código. `prompt_tokens`/`completion_tokens` vêm do `usage`
+    do chat completions (o fast-path também custa tokens; a economia do
+    KPI de custo é medida contra o slow-path, não zerada).
+    """
 
-    logprobs: dict[str, float]
+    code: str
 
-    probabilities: dict[Label, float]
+    confidence: float
 
     entropy: float
+
+    valid_code: bool
+
+    prompt_tokens: int
+
+    completion_tokens: int
 
     latency_ms: float
 
 
-def _build_request_body(
-    state: str,
-    choices: Sequence[Label],
-    model: str,
-    instructions: str,
-) -> dict[str, Any]:
-    return {
-        "model": model,
-        "state": state,
-        "instructions": instructions,
-        "questions": {
-            QUESTION_ID: {
-                "type": "choice",
-                "instructions": QUESTION_INSTRUCTIONS,
-                "criteria": {choice: None for choice in choices},
-            }
-        },
-    }
+def _confidence_from_logprobs(logprobs: Sequence[float]) -> float:
+    """Média geométrica das probabilidades: exp(Σ ln p / n)."""
+    if not logprobs:
+        return 0.0
+    return math.exp(sum(logprobs) / len(logprobs))
 
 
-def _logprobs_from_probabilities(
-    raw: Mapping[str, float],
-    choices: Sequence[Label],
-) -> dict[str, float]:
-    """Converte as probabilidades do servidor em logprobs naturais dos `choices`.
-
-    Chaves fora de `choices` são ignoradas (mesma política do router); opções
-    ausentes ou com probabilidade 0 ficam de fora e recebem `LOGPROB_FLOOR`
-    via `compute_metrics`. Retorna `dict[str, float]` (e não `dict[Label, ...]`)
-    porque `Mapping` é invariante na chave e `compute_metrics` espera
-    `Mapping[str, float]`.
-    """
-    logprobs: dict[str, float] = {
-        choice: math.log(raw[choice]) for choice in choices if raw.get(choice, 0.0) > 0.0
-    }
-    return logprobs
+def _entropy_from_top_logprobs(
+    top_entries: Sequence[Mapping[str, float]],
+) -> float:
+    """Entropia de Shannon (bits) sobre a distribuição top-k normalizada."""
+    weights = [math.exp(entry["logprob"]) for entry in top_entries]
+    total = sum(weights)
+    if total <= 0.0:
+        return 0.0
+    # Chaves indexadas: pesos iguais são entradas distintas da distribuição
+    # (uma chave única colapsaria a soma e reduziria a entropia).
+    return shannon_entropy({str(index): weight / total for index, weight in enumerate(weights)})
 
 
-def evaluate_typed_decision(
-    state: str,
-    choices: Sequence[Label],
+def evaluate_short_classification(
+    item_name: str,
     *,
     model: str = DEFAULT_MODEL,
     base_url: str = DEFAULT_BASE_URL,
-    instructions: str = SYSTEM1_SYSTEM_PREFIX,
+    instructions: str = SYSTEM1_INSTRUCTIONS,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    top_logprobs: int = DEFAULT_TOP_LOGPROBS,
+    temperature: float = 0.0,
     timeout_s: float = 10.0,
     client: httpx.Client | None = None,
 ) -> System1Output:
-    """Executa a decisão tipada de 1 token (FR-002) e retorna as métricas de saída.
+    """Executa o fast-path NCM e retorna código + confiança.
 
-    Valida `choices` antes de qualquer HTTP (cenário de aceite 2 da Story 2):
-    pelo menos dois rótulos únicos, não vazios e dentro do vocabulário
-    `Label` (Entailment/Contradiction) — rótulos fora do vocabulário não
-    seriam mapeados pelo servidor. O prompt fixo vai no campo
-    `instructions` (igual em toda query, para o prefix caching) e o par
-    variável no `state`. Erros de status/timeout/conexão do httpx propagam —
-    o fallback gracioso é responsabilidade do harness (Componente G).
+    Erros de status/timeout/conexão do httpx propagam — o fallback gracioso
+    é responsabilidade do harness (Componente G).
     """
-    choices_list = list(choices)
-    if len(choices_list) < 2 or len(set(choices_list)) != len(choices_list):
-        raise ValueError(f"choices must have at least two unique labels, got {choices_list!r}")
-    if any(not choice.strip() for choice in choices_list):
-        raise ValueError(f"choices must be non-blank labels, got {choices_list!r}")
-    valid_labels = set(get_args(Label))
-    if not set(choices_list) <= valid_labels:
-        raise ValueError(
-            f"choices must be labels from {sorted(valid_labels)}, got {choices_list!r}"
-        )
+    if not item_name.strip():
+        raise ValueError("item_name must be a non-blank string")
 
-    body = _build_request_body(state, choices_list, model, instructions)
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": item_name},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "logprobs": True,
+        "top_logprobs": top_logprobs,
+        # Qwen3 "original" pensa por padrão no template de chat; a geração
+        # curta do fast-path não pode abrir bloco <think>.
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
 
-    response, latency_ms = post_json(client, f"{base_url}/systemone", body, timeout_s)
+    response, latency_ms = post_json(client, f"{base_url}/chat/completions", payload, timeout_s)
 
-    answer = response.json()["answers"][QUESTION_ID]
-    logprobs = _logprobs_from_probabilities(answer["probabilities"], choices_list)
-    metrics = compute_metrics(logprobs, choices_list)
+    data = response.json()
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    raw_content = message.get("content")
+    content = raw_content if isinstance(raw_content, str) else ""
+
+    match = NCM_CODE_PATTERN.search(content)
+    code = match.group(1) if match else INVALID_CODE_SENTINEL
+    valid = match is not None and is_valid_code(code)
+
+    token_logprobs: list[float] = []
+    first_token_top: list[dict[str, float]] = []
+    logprobs_payload = choice.get("logprobs") or {}
+    content_logprobs = logprobs_payload.get("content") or []
+    for position, entry in enumerate(content_logprobs):
+        if isinstance(entry.get("logprob"), (int, float)):
+            token_logprobs.append(float(entry["logprob"]))
+        if position == 0:
+            first_token_top = list(entry.get("top_logprobs") or [])
+
+    confidence = _confidence_from_logprobs(token_logprobs) if valid else 0.0
+    entropy = _entropy_from_top_logprobs(first_token_top)
+
+    usage = data.get("usage") or {}
     return System1Output(
-        top_choice=metrics["top_choice"],
-        top_probability=metrics["confidence"],
-        logprobs=logprobs,
-        probabilities=metrics["probabilities"],
-        entropy=metrics["entropy"],
+        code=code,
+        confidence=confidence,
+        entropy=entropy,
+        valid_code=valid,
+        prompt_tokens=int(usage.get("prompt_tokens") or 0),
+        completion_tokens=int(usage.get("completion_tokens") or 0),
         latency_ms=latency_ms,
     )

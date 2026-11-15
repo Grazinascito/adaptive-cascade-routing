@@ -1,119 +1,72 @@
-# Spec: Component A — Dataset Pipeline & Prompt Formatter (`src/data/loader.py`)
+# Spec: Componente A — Pipeline de Dataset NCM (`src/data/loader.py`)
 
-**Feature Branch**: `001-component-a-dataset-loader`  
-**Created**: 2026-11-07  
-**Status**: Draft  
-**Input**: Description: "Dataset ingestion, label normalization, prompt formatting for vLLM Prefix Caching, and frozen test set sampling for ASSIN 2 PT-BR benchmark"
-
-> **Nota de pivot (2026-11-14)**: a tarefa e o dataset do benchmark estão sendo trocados (NLI binária / ASSIN 2 → classificação de itens de catálogo em códigos NCM) pela task `005-dataset-pivot-ncm` — spec em [`docs/dataset-pivot-ncm-spec.md`](dataset-pivot-ncm-spec.md). As stories abaixo descrevem o estado implementado do Marco 1 e serão reescritas nessa task; a medição do Marco 1 no ASSIN 2 permanece no histórico do git (commit `79a8654`).
+**Feature Branch**: `005-dataset-pivot-ncm` (rewrite do loader; a versão ASSIN 2 está no histórico do git, commit `79a8654` e anteriores)
+**Created**: 2026-11-14 (pivot)
+**Input**: Stories 1–3 de `docs/dataset-pivot-ncm-spec.md`
 
 ---
 
 ## Stories & Testing *(mandatory)*
 
-### Story 1 - ASSIN 2 Dataset Ingestion and Label Normalization (Type: ENABLER, Priority: P1)
+### Story 1 - Parser do dataset NCM-RAFT e estatística do pool (Type: ENABLER, Priority: P1)
 
-Implement data loading from Hugging Face Datasets (`nilc-nlp/assin2`) and map textual entailment labels into binary classification categories (`Entailment` vs `Contradiction`).
+Parsear as conversas de `yurifacanha/NCM-RAFT-samall` (105.336 linhas, split `train` único, colunas `conversation_id`/`conversations` com papéis `user`/`assistant`). O par canônico (nome, código de 8 dígitos) vive na PRIMEIRA mensagem: `o codigo da categoria do {nome} é: {código}` — o parse não depende da resposta do assistente (que às vezes traz código, às vezes só descrição). `pool_stats` reporta taxa de extração, pares únicos, códigos, nomes conflitantes e nomes curtos.
 
-**Why this priority**: Highest risk reduction — without verified, deterministic, and clean PT-BR dataset pairs, downstream System 1 and System 2 inference engines cannot execute or be evaluated against ground truth.
+**Why this priority**: sem parser verificado todo o pivot é chute.
 
-**Independent Test**: Unit test with `pytest` checking dataset loading, schema validation, and 100% label mapping correctness across all loaded samples.
-
-**Acceptance Scenarios**:
-
-1. **Given** the Hugging Face `nilc-nlp/assin2` dataset, **When** `load_assin2_raw_split(split="test")` is invoked, **Then** it MUST return a Pandas DataFrame or list of dicts containing non-empty `premise`, `hypothesis`, and mapped `label` strings.
-2. **Given** an ASSIN 2 sample with `entailment_judgment = "ENTAILMENT"`, **When** processed by `normalize_label()`, **Then** the normalized label MUST equal `"Entailment"`.
-3. **Given** an ASSIN 2 sample with `entailment_judgment = "NONE"`, **When** processed by `normalize_label()`, **Then** the normalized label MUST equal `"Contradiction"`.
-
----
-
-### Story 2 - vLLM Prefix Caching Prompt Formatter (Type: FUNCTIONALITY, Priority: P2)
-
-Construct static system prompt prefixes and user state strings designed to maximize vLLM's `--enable-prefix-caching` KV-cache hit rate across queries.
-
-**Why this priority**: Unlocks the ultra-fast System 1 prefill performance (~5-10ms) by ensuring the system instruction and choices schema remain 100% byte-identical across requests.
-
-**Independent Test**: Unit test verifying exact string formatting and byte-level alignment of the system prompt prefix.
+**Independent Test**: célula de sonda do notebook imprimindo `STATS`; gate taxa >= 0,98 (medido em 2026-11-14: 0,9968 — 336 falhas em 105.336).
 
 **Acceptance Scenarios**:
+1. **Given** uma conversa no formato real, **When** `parse_conversation` roda, **Then** devolve `NCMItem` com nome (>= 3 chars) e código de 8 dígitos.
+2. **Given** 1.000 stubs com 3% corrompidos, **When** `pool_stats` roda, **Then** reporta taxa 0,97.
 
-1. **Given** a `premise` and `hypothesis` pair, **When** `format_system1_prompt(premise, hypothesis)` is called, **Then** it MUST return a `state` string containing a standardized system header, the premiss text, the hypothesis text, and a rigid formatting structure.
-2. **Given** multiple queries processed sequentially, **When** formatted by `format_system1_prompt`, **Then** the system instruction prefix MUST remain identical to enable vLLM KV-cache reuse.
+**Testes unitários** (`tests/data/test_loader.py`): `test_parses_conversation_into_name_and_code`, `test_reports_none_when_answer_has_no_eight_digit_code`, `test_reports_none_for_empty_conversation`, `test_drops_names_shorter_than_minimum_length`, `test_extraction_success_rate_counts_malformed_rows`, `test_conflicting_names_are_counted`.
 
----
+### Story 2 - Taxonomia de apoio e validade de código (Type: ENABLER, Priority: P1)
 
-### Story 3 - Frozen Test Set Sampler with Deterministic Seed (Type: HYPOTHESIS, Priority: P3)
-
-Provide a deterministic sampling function `get_frozen_eval_set(sample_limit=200, seed=42)` that extracts a balanced 50/50 subset of `Entailment` and `Contradiction` pairs for benchmark evaluation.
-
-**Why this priority**: Ensures reproducible evaluation across System 1, System 2, and Adaptive Cascade runs without class imbalance bias.
-
-**Independent Test**: Executing `get_frozen_eval_set(200, seed=42)` twice yields identical sample ordering and exactly 100 `Entailment` and 100 `Contradiction` pairs.
+`config/ncm_taxonomy.csv` (commitado): 114 códigos × (capítulo, título do capítulo, descrição completa), derivado das descrições embutidas no próprio dataset (descrição única por código — verificada em 2026-11-14). `is_valid_code` é o gatilho de escalada do System 1; `chapter_lines` alimenta o prefixo estático dos prompts (mantém o prefix caching).
 
 **Acceptance Scenarios**:
+1. `is_valid_code("22071090")` → `True`; `is_valid_code("99999999")` → `False`.
+2. CSV com código duplicado, descrição vazia ou código não-8-dígitos levanta `ValueError` no load.
 
-1. **Given** `sample_limit = 200` and `seed = 42`, **When** `get_frozen_eval_set()` is called, **Then** the returned list MUST contain exactly 200 items, with 100 labeled `"Entailment"` and 100 labeled `"Contradiction"`.
-2. **Given** repeated invocations with `seed = 42`, **When** dataset hashes are computed, **Then** the hash of the dataset samples MUST be 100% deterministic.
+**Testes unitários**: `test_is_valid_code_accepts_known_and_rejects_unknown_codes`, `test_taxonomy_csv_has_unique_codes_and_no_blank_descriptions`, `test_chapter_lines_list_every_chapter_once`.
 
----
+### Story 3 - Amostragem congelada head/tail (Type: HYPOTHESIS, Priority: P2)
 
-### Edge Cases
+`get_frozen_eval_set(items, ...)`: dedup de pares → exclusão de nomes conflitantes (mesmo nome, códigos diferentes; contados e logados) → frequência de cada código sobre pares únicos limpos → head = códigos com >= `head_min_code_freq` (50) nomes únicos → amostragem estratificada `round(sample_limit × head_share)` head + resto tail, `random.Random(seed)` com seed 42. Cada `NCMEvalSample` carrega `item_id` (linha original), `code_freq` e `subset`.
 
-- **Missing or corrupted dataset split on Hugging Face**: The loader MUST fallback to cached local copies or raise an informative `DatasetDownloadError`.
-- **Malformed text or missing fields in sample**: Rows with `None` or empty strings in `premise` or `hypothesis` MUST be filtered out automatically with a warning log.
-- **Unrecognized label string**: Any label value other than `"ENTAILMENT"` or `"NONE"` (e.g., numeric values or unexpected strings) MUST raise a `ValueError("Invalid ASSIN2 label")`.
-- **Sample count requested exceeds available split size**: If `sample_limit` > split length, system MUST raise `ValueError` and log max available rows.
-- **Input strings containing reserved XML markers**: `format_system1_prompt` MUST reject premises/hypotheses containing `<premise>`, `</premise>`, `<hypothesis>`, or `</hypothesis>` (case-insensitive) with `ValueError`, preventing marker-breaking prompt injection (FR-005). Audited on 2026-11-08: 0 occurrences in the 2,448-row test split, so this never triggers on real ASSIN 2 data.
-- **Odd or non-positive `sample_limit`**: `get_frozen_eval_set` MUST raise `ValueError` when `sample_limit` is not a positive even number, because a balanced 50/50 split of an odd count is undefined (decision recorded 2026-11-08; behavior existed in code before this line).
-- **Label encoding variation**: `entailment_judgment` arrives as a `ClassLabel` integer from the Hub and is decoded with `int2str`; an already-decoded plain string is also accepted (defensive branch against `datasets` configuration variation, covered by a unit test with a stub dataset).
+**Why this priority**: a composição cabeça/cauda é o que torna a tese testável.
+
+**Independent Test**: duas chamadas com seed 42 produzem listas idênticas; proporções batem o alvo.
+
+**Acceptance Scenarios**:
+1. **Given** seed 42, **When** roda duas vezes, **Then** as listas são idênticas.
+2. **Given** head_share 0.6 e sample_limit 10, **Then** 6 head + 4 tail, códigos head só no subset head.
+3. **Given** pool tail insuficiente, **Then** `ValueError` orientando ajustar parâmetros.
+
+**Testes unitários**: `test_frozen_eval_set_is_deterministic_with_seed_42`, `test_head_tail_proportions_match_configured_target`, `test_conflicting_names_are_excluded_and_counted`, `test_raises_when_tail_pool_is_smaller_than_requested_share`, `test_rejects_invalid_parameters`.
+
+### Granularidade do rótulo
+
+`truncate_code(code, digits)` com `digits ∈ {2, 4, 6, 8}` (capítulo/posição/subposição/item). O nível é congelado pela sonda do notebook (o mais fino com S1 em 0.30–0.70) e aplicado de forma idêntica a predições e ground truths na avaliação (evaluator). Testes: `test_truncates_to_each_supported_granularity`, `test_rejects_unsupported_granularity`.
 
 ---
 
 ## Requirements *(mandatory)*
 
-### Functional Requirements
-
-- **FR-001**: System MUST load the `nilc-nlp/assin2` dataset split (`test` or `train`) via Hugging Face `datasets` API.
-- **FR-002**: System MUST convert `entailment_judgment` values into target binary strings: `"ENTAILMENT"` -> `"Entailment"`, `"NONE"` -> `"Contradiction"`.
-- **FR-003**: System MUST provide a function `format_system1_prompt(premise: str, hypothesis: str) -> Dict[str, str]` returning:
-  - `system_prefix`: Static system instruction for vLLM prefix caching.
-  - `user_state`: Prompt payload containing the premise and hypothesis text.
-- **FR-004**: System MUST provide a deterministic sampling function `get_frozen_eval_set(split: str = "test", sample_limit: int = 200, seed: int = 42) -> List[Dict[str, Any]]`.
-- **FR-005**: System MUST validate input strings to prevent prompt injection or formatting breaking characters.
-
-### Non-Functional Requirements *(AI-critical)*
-
-- **NFR-001**: Execution time for dataset loading and prompt formatting of 200 samples MUST stay under 1.0 second.
-- **NFR-002**: Memory footprint for storing loaded test samples MUST stay under 50 MB RAM.
-- **NFR-003**: Determinism: 100% bit-exact reproducibility when sampling with fixed seed `42`.
-
-### Key Entities
-
-- **ASSIN2Sample**:
-  - `id`: Unique string or int identifier.
-  - `premise`: Raw Portuguese premise text.
-  - `hypothesis`: Raw Portuguese hypothesis text.
-  - `label`: Mapped binary label (`"Entailment"` or `"Contradiction"`).
-  - `original_score`: Float similarity score (1.0 to 5.0) from ASSIN 2 metadata.
-- **FormattedPromptPayload**:
-  - `system_prefix`: Static prompt prefix for KV-cache reuse.
-  - `user_state`: Instance specific text payload.
-  - `choices`: Rigid list `["Entailment", "Contradiction"]`.
-
----
+- **FR-001**: `load_ncm_pool()` DEVE carregar o split `train` via `datasets` e retornar `(itens, total de linhas)`; falhas de rede viram `DatasetDownloadError`.
+- **FR-002**: `parse_conversation` DEVE extrair (nome, código) da primeira mensagem; nome < 3 chars ou sem código de 8 dígitos → `None` (contado como falha de extração).
+- **FR-003**: `load_taxonomy` DEVE validar o CSV (8 dígitos, sem duplicatas, descrição não vazia) e cachear; `chapter_lines` DEVE listar cada capítulo uma vez.
+- **FR-004**: `get_frozen_eval_set` DEVE ser determinístico com seed fixa, excluir nomes conflitantes e particionar por frequência de código.
 
 ## Success Criteria *(mandatory)*
 
-### Measurable Outcomes
-
-- **SC-001**: 100% accuracy in mapping ASSIN 2 raw labels to `"Entailment"` and `"Contradiction"`.
-- **SC-002**: 100% bit-exact determinism across repeated executions of `get_frozen_eval_set(200, seed=42)`.
-- **SC-003**: Zero prompt formatting errors or unhandled schema violations on the entire ASSIN 2 test split (2,448 samples).
-
----
+- **SC-001**: taxa de extração >= 0,98 no pool (gate da sonda).
+- **SC-002**: determinismo bit-exato da amostragem com seed 42.
+- **SC-003**: zero nomes conflitantes no conjunto congelado.
 
 ## Assumptions
 
-- The `nilc-nlp/assin2` dataset is publicly accessible on Hugging Face Hub without requiring authentication tokens.
-- The task scope is restricted strictly to binary Natural Language Inference (NLI) in PT-BR.
-- Python 3.12 environment with `datasets>=2.14.0` and `pandas>=2.0.0` pre-installed.
+- O dataset permanece público no Hugging Face sem token; é baixado em runtime e não redistribuído (procedência e risco de ruído declarados no README; mitigação = revisão humana do Story 3 da spec do pivot).
+- Python 3.12 com `datasets` e `pandas` (o CSV é lido com a biblioteca padrão `csv`).

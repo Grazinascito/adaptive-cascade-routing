@@ -1,99 +1,66 @@
-# Feature Branch: `spec/component-f-g-system2-evaluator`
+# Feature Branch: `005-dataset-pivot-ncm` (rewrite dos Componentes F–G; a versão ASSIN 2 está no histórico, commit `79a8654`)
 
-**Created**: 2026-11-07
-**Status**: Draft
-**Input**: Detailed Design Sections 5.6 (Component F: System 2 Slow-Path Engine - `system2.py`) and 5.7 (Component G: Benchmark & Performance Evaluation Harness - `evaluator.py`) from Design Doc `docs/adaptive-cascade-design-doc.md`.
-
-> **Nota de pivot (2026-11-14)**: a tarefa e o dataset do benchmark estão sendo trocados (NLI binária / ASSIN 2 → classificação de itens de catálogo em códigos NCM) pela task `005-dataset-pivot-ncm` — spec em [`docs/dataset-pivot-ncm-spec.md`](dataset-pivot-ncm-spec.md). O Componente F troca o prompt/rótulo (par de frases → nome de item → código NCM) e o Componente G ganha os gates redefinidos (SC-A/B/C por subconjunto cabeça/cauda); o desenho do harness e do sweep é reusado. As stories abaixo descrevem o estado implementado do Marco 1 e serão reescritas nessa task; a medição do Marco 1 no ASSIN 2 permanece no histórico do git (commit `79a8654`).
+**Created**: 2026-11-14 (pivot)
+**Input**: Stories 5–6 de `docs/dataset-pivot-ncm-spec.md`
 
 ---
 
 ## Component Overview
 
-- **Component F (§5.6): System 2 Slow-Path Engine (`system2.py`)**: Responsible for handling borderline/ambiguous NLI cases by executing Chain-of-Thought (CoT) reasoning and enforcing structured JSON outputs via `/v1/chat/completions`.
-- **Component G (§5.7): Benchmark & Performance Evaluation Harness (`evaluator.py`)**: Responsible for executing tests across all 3 scenarios (System 1 Pure, System 2 Pure, Adaptive Cascade), recording per-request latency ($p50$, $p95$, $p99$), counting prefill/decode tokens, evaluating accuracy/F1-score, and computing Average Performance Gap Recovered (APGR).
+- **Componente F (§5.6): System 2 NCM (`system2.py`)**: mesmo mecanismo do Marco 1 (CoT + JSON via `/v1/chat/completions`, `max_tokens=256`, `enable_thinking=False`), com prompt reescrito: lista de capítulos como contexto da taxonomia + nome do item + JSON `{"reasoning", "ncm_code"}`. Cadeia de fallback JSON → regex `\b\d{8}\b` → sentinela `00000000`.
+- **Componente G (§5.7): Benchmark Harness (`evaluator.py` + `summary.py`)**: 3 cenários sobre o conjunto congelado head/tail; `BenchmarkResult` ganha `subset`; tokens somam os engines invocados; gates SC-A/B/C; sweep de α por replay; gate anti-degeneração; taxa de fallback comparada à banda 30–50% do blog.
 
 ---
 
 ## Stories & Testing *(mandatory)*
 
-### Story 1 - System 2 Chain-of-Thought & JSON Schema Execution (Component F §5.6, Type: functionality, Priority: P1)
+### Story 5 - System 2 NCM: CoT + JSON (Type: functionality, Priority: P1)
 
-Implement the slow-path fallback module (`System2Engine`) that accepts ambiguous/low-confidence queries from the router, prompts the LLM for step-by-step reasoning (Chain-of-Thought), and parses structured JSON output containing the final label (`Entailment` or `Contradiction`).
+**Why this priority**: o slow-path precisa responder na mesma tarefa e no mesmo espaço de rótulos do S1.
 
-**Why this priority**: Ensures the cascade router has a functional, high-accuracy fallback mechanism when System 1 uncertainty is high.
-
-**Independent Test**: Execute 20 sample NLI pairs through `execute_reasoning()`. Pass threshold: >= 95% valid JSON outputs parsed without fallback regex, with correct label schema.
+**Independent Test**: célula F do notebook (20 itens; gate JSON >= 95% + código existente na taxonomia).
 
 **Acceptance Scenarios**:
-1. **Given** a premise and hypothesis flagged with high entropy by the router, **When** `execute_reasoning(premise, hypothesis)` is called via `/v1/chat/completions`, **Then** the engine returns a `System2Output` TypedDict containing `reasoning`, `label`, `prompt_tokens` + `completion_tokens`, `latency_ms`, and `fallback_used` (field list per Key Entities below).
-2. **Given** a non-compliant JSON response from the LLM, **When** JSON decoding fails, **Then** the system gracefully falls back to regex label extraction (`Contradiction` or `Entailment`) and logs a warning without crashing.
+1. **Given** um nome de item, **When** `execute_reasoning` roda, **Then** o prompt contém o nome, a lista de capítulos e o schema JSON; a saída traz `ncm_code` de 8 dígitos.
+2. **Given** JSON válido dentro de cerca de markdown, **Then** parse sem fallback.
+3. **Given** JSON inválido com código no texto, **Then** regex com `fallback_used=True` e warning.
+4. **Given** output vazio/sem código, **Then** sentinela `00000000` com `fallback_used=True`.
 
----
+**Testes unitários** (`tests/engine/test_system2.py`): `test_json_contains_valid_ncm_code_and_item_name`, `test_parses_fenced_json_without_fallback`, `test_falls_back_to_regex_when_json_is_malformed`, `test_defaults_to_sentinel_code_on_empty_output`, `test_falls_back_when_json_is_valid_but_code_is_malformed`, `test_defaults_tokens_to_zero_when_usage_is_absent`.
 
-### Story 2 - Benchmark Harness & Multi-Scenario Metrics Collector (Component G §5.7, Type: enabler, Priority: P1)
+### Story 6 - Benchmark com subsets e gates do pivot (Type: hypothesis, Priority: P2)
 
-Implement `BenchmarkHarness` to orchestrate execution over the frozen 200-sample test set for all 3 scenarios (System 1 Pure, System 2 Pure, Adaptive Cascade) and log detailed latency, token consumption, and accuracy metrics.
+**Why this priority**: é a medição que responde a tese.
 
-**Why this priority**: Essential for proving the 'Tokens are money' hypothesis and measuring latency/cost reductions with statistical rigor.
-
-**Independent Test**: Run a benchmark dry-run over 10 frozen samples across all 3 scenarios. Verify that `raw_benchmark_data.json` is generated with complete metrics for every query ID.
-
-**Acceptance Scenarios**:
-1. **Given** a frozen dataset of 200 ASSIN 2 samples, **When** `run_full_benchmark(confidence_threshold=alpha)` is executed (samples come from the harness constructor), **Then** it records per-request `system_1_latency_ms`, `system_2_latency_ms`, `total_latency_ms`, `tokens_prefill`, `tokens_decode`, `prediction`, and `ground_truth` in a `BenchmarkResult` (full field list per Key Entities below; dry-run writes `results/raw_benchmark_data_dryrun.json`).
-2. **Given** the recorded benchmark results, **When** `compute_summary_metrics()` is called, **Then** it outputs $p50$, $p95$, $p99$ latency percentiles, total token counts, F1-Score, Accuracy, and APGR (Average Performance Gap Recovered). The first `warmup_discard` requests (default 5, design doc §10 risk 2) are excluded from the latency percentiles only; accuracy/tokens/rates use every request.
-
----
-
-### Story 3 - APGR & Trade-off Curve Generator (Component G §5.7, Type: hypothesis, Priority: P2)
-
-Sweep the confidence threshold alpha in [0.0, 1.0] across the benchmark results to evaluate the trade-off curve between latency reduction, token savings, and APGR accuracy recovery. Implemented as a replay: `sweep_alpha(run)` recomputes the routing decision per alpha over the measurements recorded by `run_full_benchmark` — no new HTTP calls (`temperature=0.0` makes the System 2 output deterministic within a session) — and writes `results/latency_cost_tradeoff.png`.
-
-**Why this priority**: Validates RouteLLM's mathematical formulation of optimal decision thresholds.
-
-**Independent Test**: Sweep alpha across 5 values (0.50, 0.70, 0.85, 0.90, 0.95). Pass threshold: verify monotonic relationship between alpha and System 2 call rate.
+**Independent Test**: dry-run G1 (12 amostras, todo `item_id` nos 3 cenários) + G2/G3/G4 no Colab.
 
 **Acceptance Scenarios**:
-1. **Given** benchmark execution logs across varying alpha, **When** APGR is calculated via $\text{APGR}(\alpha) = \frac{\text{Accuracy}(\text{Cascade}_\alpha) - \text{Accuracy}(\text{System 1})}{\text{Accuracy}(\text{System 2}) - \text{Accuracy}(\text{System 1})}$, **Then** the system identifies the optimal alpha where $\text{APGR} \ge 0.95$ with minimum System 2 invocation rate.
+1. **Given** o conjunto congelado, **When** `run_full_benchmark` roda, **Then** cada registro carrega `subset` head/tail e tokens somados dos engines invocados; predição e ground truth truncados por `label_digits` de forma idêntica.
+2. **Given** erro HTTP do System 2 na cascata, **Then** predição do System 1 + `system2_error_fallback=True` (fallback gracioso).
+3. **Given** as medições gravadas, **When** `sweep_alpha` roda, **Then** replay sem HTTP com `route()` real por α.
+4. **Given** confiança do S1 >= 0.95 em > 95% dos itens, **Then** `confidence_degeneration_share` dispara o aviso anti-degeneração (edge case da spec do pivot).
+
+**Testes unitários** (`tests/metrics/`): `test_run_full_benchmark_records_every_item_in_all_three_scenarios`, `test_cascade_escalation_sums_tokens_of_both_engines`, `test_label_digits_truncates_predictions_and_ground_truths_identically`, `test_build_result_keeps_already_truncated_predictions_as_is`, `test_system_two_http_error_falls_back_to_system1_prediction_and_logs`, `test_sweep_alpha_call_rate_is_monotonic_across_thresholds`, `test_sweep_alpha_replays_route_fast_path_on_confidence_equal_to_alpha`, `test_confidence_degeneration_share_counts_high_confidence_items`, `test_optimal_alpha_prefers_lowest_call_rate_among_winners`, `test_save_raw_results_writes_meta_scenarios_sweep_summaries_and_kpis`, `test_plot_tradeoff_curve_writes_non_empty_png`, `test_main_runs_benchmark_from_config_against_stub_server`, `test_compute_summary_metrics_reports_head_and_tail_accuracy_separately`, `test_evaluate_kpis_flags_each_pivot_gate`, `test_evaluate_kpis_fails_recovery_when_cascade_drops_below_system1_overall`, `test_evaluate_kpis_requires_tail_accuracy_in_every_summary`.
 
 ---
-
-### Edge Cases
-
-- **Model Timeout / Failure in System 2**: If System 2 times out or returns HTTP 500, return System 1's top prediction as a graceful fallback and log an error.
-- **Extreme Ambiguity ($P_{\text{top}} = 0.50$)**: Router must cleanly escalate to System 2 without infinite loops or division-by-zero errors in APGR calculation when System 1 and System 2 accuracies are equal.
-- **Empty or Truncated Output**: System 2 parser handles empty response strings by defaulting to Contradiction with a fallback flag set.
 
 ## Requirements *(mandatory)*
 
-### Functional Requirements
-
-- **FR-001**: System2Engine (Component F §5.6) MUST construct the prompt from fixed system-level CoT instructions plus the user prompt (premise/hypothesis pair), requiring step-by-step Chain-of-Thought reasoning prior to the final classification. Both parts travel in a single `user` message — the chat contract validated in the Colab gate (>= 95% valid JSON on the 20-pair run); splitting them into separate `system`/`user` messages is a post-merge prefix-caching optimization candidate.
-- **FR-002**: System2Engine (Component F §5.6) MUST enforce strict JSON formatting (reasoning and label: Entailment or Contradiction).
-- **FR-003**: BenchmarkHarness (Component G §5.7) MUST execute all 3 scenarios (System 1 Pure, System 2 Pure, Adaptive Cascade) on the exact same frozen 200-sample test set to ensure unbiased comparisons.
-- **FR-004**: BenchmarkHarness (Component G §5.7) MUST measure latency per request using high-precision timers (`time.perf_counter`).
-- **FR-005**: BenchmarkHarness (Component G §5.7) MUST record prefill tokens and decode tokens for each request.
-- **FR-006**: BenchmarkHarness (Component G §5.7) MUST calculate accuracy, macro F1-score, $p50/p95/p99$ latencies, and APGR metric for each scenario.
-
-### Non-Functional Requirements *(AI-critical)*
-
-- **NFR-001**: System 2 execution MUST remain bounded (`max_tokens` <= 256) to prevent run-away generation cost during fallback.
-- **NFR-002**: Benchmark logging MUST persist raw data to `results/raw_benchmark_data.json` for auditability and post-hoc analysis.
-
-### Key Entities
-
-- **`System2Output`**: TypedDict containing reasoning, label, prompt_tokens, completion_tokens, latency_ms, fallback_used.
-- **`BenchmarkResult`**: TypedDict (superset of RNF-04 of the design doc and FR-006 of the engine-router spec) containing `query_id`, `scenario` (`system1_pure` | `system2_pure` | `cascade`), `alpha`, `replayed`, `system_1_latency_ms`, `system_2_latency_ms`, `total_latency_ms`, `confidence`, `entropy`, `routed_to_system_2`, `tokens_prefill`, `tokens_decode`, `prediction`, `ground_truth`, `is_correct`, `system2_fallback_used` (parser level), `system2_error_fallback` (HTTP failure of System 2 in the cascade), and `json_valid` (basis of the SC-001 re-measurement). Tokens of System 1 are always 0 — the `/v1/systemone` response has no `usage`.
-- **`SummaryReport`**: TypedDict with the aggregates of one scenario: $p50/p95/p99$ latencies (`latency_percentiles_ms`), total prefill/decode tokens, Accuracy, macro F1-Score, System 2 call rate, APGR, and `json_success_rate`.
-- **`KPIReport`**: TypedDict with the SC-002/SC-003/SC-004 verdicts as (passed, measured value) pairs.
+- **FR-001**: `execute_reasoning` DEVE manter a instrução fixa (capítulos) + item numa única mensagem `user`, CoT antes do JSON (contrato validado no Colab).
+- **FR-002**: parser DEVE aceitar JSON com ou sem cerca de markdown e extrair `ncm_code` de 8 dígitos; validade na taxonomia é papel da avaliação.
+- **FR-003**: harness DEVE rodar os 3 cenários no MESMO conjunto congelado (FR-003 do Marco 1, mantido).
+- **FR-004**: latência via `time.perf_counter` na camada serving; warmup discard de 5 só nos percentis.
+- **FR-005**: tokens prefill/decode SOMAM os engines invocados por requisição (fast-path também custa tokens).
+- **FR-006**: `compute_summary_metrics` DEVE reportar acurácia geral + head + tail, macro F1 sobre os códigos presentes, taxa de chamadas ao S2 e APGR (informativo).
+- **FR-007**: `evaluate_kpis(cascade, system1, system2, kpis)` DEVE avaliar SC-A (tail_gap_pp >= 10), SC-B (recovery >= 0.50 E cascata >= S1 geral), SC-C (p95 e tokens vs S2 puro).
 
 ## Success Criteria *(mandatory)*
 
-- **SC-001**: System 2 JSON parsing success rate >= 95% on the test set.
-- **SC-002**: Benchmark Harness produces valid $p50, p95, p99$ latency percentiles and token counts for 100% of the 200 test samples across all 3 scenarios.
-- **SC-003**: Adaptive Cascade achieves $p95$ latency reduction >= 50% vs System 2 Pure while recovering >= 95% APGR accuracy.
+- **SC-001**: json_success_rate >= 0.95 no cenário system2_pure (gate F, re-medição do Marco 1).
+- **SC-002**: 100% dos registros com subset válido nos 3 cenários (dry-run G1).
+- **SC-003**: gates SC-A/SC-B/SC-C impressos com PASS/FAIL honesto; FAIL de premissa (ex.: SC-A) é resultado, não erro de execução.
 
 ## Assumptions
 
-- vLLM chat completions endpoint is healthy and accessible locally.
-- Frozen eval set of 200 samples is loaded deterministically from `loader.py`.
+- vLLM saudável no localhost; conjunto congelado carregado deterministicamente pelo loader (seed 42).
+- `temperature=0.0` torna a saída do S2 determinística na sessão — premissa do sweep por replay (mantida do Marco 1).

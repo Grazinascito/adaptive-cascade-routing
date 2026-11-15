@@ -20,9 +20,9 @@ Este documento lista todas as tarefas do projeto: as concluídas, a tarefa em an
 
 | Status | Quantidade |
 |--------|------------|
-| Concluídas | 4 |
+| Concluídas | 5 |
 | Em andamento | 1 |
-| Planejadas | 6 |
+| Planejadas | 5 |
 
 ---
 
@@ -62,29 +62,36 @@ Este documento lista todas as tarefas do projeto: as concluídas, a tarefa em an
 
 ### 5. Componente G — Benchmark & Performance Evaluation Harness
 
-- **Status**: 🔄 Em andamento. PR [#5](https://github.com/Grazinascito/adaptive-cascade-routing/pull/5) aberto, CI verde, branch `004-component-g-evaluator`.
-- **Descrição**: `src/evaluation/evaluator.py` executa o benchmark nos 3 cenários (System 1 puro, System 2 puro, cascata adaptativa), mede latência p50/p95/p99, conta tokens de prefill/decode, calcula acurácia e F1, computa o APGR e varre valores de α para responder qual limiar maximiza a acurácia mantendo a invocação do System 2 abaixo de 15% das requisições.
-- **Spec**: [`docs/system2-evaluator-spec.md`](system2-evaluator-spec.md), Stories 2–3.
-- **Colab**: as células G1–G4 estão apenas na branch 004. Use o [link da branch 004 no Colab](https://colab.research.google.com/github/Grazinascito/adaptive-cascade-routing/blob/004-component-g-evaluator/notebook/adaptive_cascade_benchmark.ipynb). O link da `main` não contém essas células.
+- **Status**: ✅ Concluída. PR [#5](https://github.com/Grazinascito/adaptive-cascade-routing/pull/5) merged em 2026-11-14 (merge commit `6f2188c`); branch `004` deletada.
+- **Descrição**: `src/metrics/evaluator.py` + `src/metrics/summary.py` executam o benchmark nos 3 cenários (System 1 puro, System 2 puro, cascata adaptativa), medem latência p50/p95/p99, contam tokens de prefill/decode, calculam acurácia e F1, computam o APGR e varrem α por replay. Validação Colab executada em 2026-11-14: p95 −98,3% e tokens −99,6% PASS; SC-003/APGR FAIL honesto (S2 puro 0,865 < S1 puro 0,920 — o achado que motivou o pivot da task 6). Artefatos medidos commitados (`79a8654`).
+- **Spec**: [`docs/system2-evaluator-spec.md`](system2-evaluator-spec.md), Stories 2–3 (versão ASSIN 2, histórica).
+- **Colab**: validação feita pela branch 004 (deletada após o merge); notebook atual na [main](https://colab.research.google.com/github/Grazinascito/adaptive-cascade-routing/blob/main/notebook/adaptive_cascade_benchmark.ipynb) já reescrito para NCM (task 6).
+
+---
+
+## Tarefa em andamento
+
+### 6. Pivot de dataset — classificação NCM de itens de catálogo (branch `005-dataset-pivot-ncm`)
+
+- **Status**: 🔄 Em andamento. PR [#6](https://github.com/Grazinascito/adaptive-cascade-routing/pull/6) aberto em 2026-11-14, CI verde (75 testes, ruff no repo inteiro, mypy).
+
+Troca o ASSIN 2 pela tarefa de classificação de itens de catálogo em códigos **NCM** (*Nomenclatura Comum do Mercosul*: a taxonomia fiscal brasileira oficial em árvore — capítulo 2 dígitos → posição 4 → subposição 6 → item 8), usando o dataset público [`yurifacanha/NCM-RAFT-samall`](https://huggingface.co/datasets/yurifacanha/NCM-RAFT-samall) (105k linhas, PT-BR, nomes reais de itens: "ALCOOL LIQUIDO START NAT 70% - 5VL" → 22071090). É o tipo de conteúdo do blog do iFood: nome curto e ambíguo → caminho numa taxonomia em árvore, com cauda (*long tail*) real. A máquina do Marco 1 (harness, roteador por confiança, sweep de α por replay) é reusada sem mudança de desenho; mudam o loader (parser + amostragem cabeça/cauda congelada de 800 itens), os prompts (saída = código NCM) e o mecanismo do System 1 (geração curta de 8–12 tokens com confiança pelos logprobs, no lugar da pergunta `choice` binária — decisão registrada na spec). Gates novos: gap S2−S1 ≥ 10 pp na cauda, cascata recupera ≥ 50% do gap, redução de tokens ≥ 60%, taxa de fallback comparada à banda de 30–50% do blog. Inclui a reescrita de README e specs e a remoção do ASSIN 2 da linha principal do relatório. Execução estimada: ~25–45 min de Colab.
+
+- **Spec**: [`docs/dataset-pivot-ncm-spec.md`](dataset-pivot-ncm-spec.md).
+- **Sonda do dataset (medida em 2026-11-14, antes do parser)**: extração 0,9968 (gate ≥ 0,98 PASS); 69.499 pares únicos limpos; 114 códigos em 19 capítulos; 60 nomes conflitantes excluídos (0,09%); 69 códigos com ≥ 50 nomes (cabeça) e 44 raros (cauda).
+- **Colab**: use o [link da branch 005 no Colab](https://colab.research.google.com/github/Grazinascito/adaptive-cascade-routing/blob/005-dataset-pivot-ncm/notebook/adaptive_cascade_benchmark.ipynb). A célula de sonda carrega o pool, imprime a estatística e congela a granularidade (`LABEL_DIGITS`); depois vêm B, C, F e o benchmark G (~25–45 min).
 - **O que falta para concluir**:
-  1. ~~Executar as células G1–G4 no Colab~~ ✅ Feito em 2026-11-14 (gates conferidos; SC-003/APGR FAIL honesto — S2 puro 0,865 < S1 puro 0,920).
-  2. ~~Colar os números medidos no corpo do PR #5~~ ✅ Feito (seção "Colab validation status").
-  3. ~~Commitar os artefatos reais da execução em `results/`~~ ✅ Feito (commit `79a8654`, CI verde).
-  4. Review com comentários inline no GitHub (se pedida), merge e passos de pós-merge.
-  5. Após o merge: iniciar a task 6 (pivot de dataset NCM).
+  1. Rodar o notebook na T4 pela branch 005 (sonda → dry-run → benchmark completo) e conferir os gates impressos (SC-A/B/C + gate F + anti-degeneração).
+  2. Anexar o `.ipynb` com os outputs salvos para auditoria.
+  3. Commitar os artefatos reais da execução em `results/`.
+  4. Colar os números medidos no corpo do PR #6.
+  5. Review (se pedida), merge e pós-merge (BRANCH→"main", deletar 005).
 
 ---
 
 ## Tarefas planejadas
 
 Fonte: seção "9. Rollout Plan" do design doc ([`docs/adaptive-cascade-design-doc.md`](adaptive-cascade-design-doc.md)). Nenhuma delas tem branch criada, spec escrita ou PR aberto hoje.
-
-### 6. Pivot de dataset — classificação NCM de itens de catálogo (branch `005-dataset-pivot-ncm`)
-
-Troca o ASSIN 2 pela tarefa de classificação de itens de catálogo em códigos **NCM** (*Nomenclatura Comum do Mercosul*: a taxonomia fiscal brasileira oficial em árvore — capítulo 2 dígitos → posição 4 → subposição 6 → item 8), usando o dataset público [`yurifacanha/NCM-RAFT-samall`](https://huggingface.co/datasets/yurifacanha/NCM-RAFT-samall) (105k linhas, PT-BR, nomes reais de itens: "ALCOOL LIQUIDO START NAT 70% - 5VL" → 22071090). É o tipo de conteúdo do blog do iFood: nome curto e ambíguo → caminho numa taxonomia em árvore, com cauda (*long tail*) real. A máquina do Marco 1 (harness, roteador por confiança, sweep de α por replay) é reusada sem mudança de desenho; mudam o loader (parser + amostragem cabeça/cauda congelada de 800 itens), os prompts (saída = código NCM) e o mecanismo do System 1 (geração curta de 8–12 tokens com confiança pelos logprobs, no lugar da pergunta `choice` binária — decisão registrada na spec). Gates novos: gap S2−S1 ≥ 10 pp na cauda, cascata recupera ≥ 50% do gap, redução de tokens ≥ 60%, taxa de fallback comparada à banda de 30–50% do blog. Inclui a reescrita de README e specs e a remoção do ASSIN 2 da linha principal do relatório. Execução estimada: ~25–45 min de Colab.
-
-- **Spec**: [`docs/dataset-pivot-ncm-spec.md`](dataset-pivot-ncm-spec.md).
-- **Dependência**: roda após o merge do PR #5.
 
 ### 7. Marco 4 — Componente H: juiz LLM (branch `006-judge-audit`)
 
@@ -118,8 +125,8 @@ O projeto tem um único notebook, `notebook/adaptive_cascade_benchmark.ipynb`, q
 
 | Estado do notebook | Link |
 |--------------------|------|
-| `main` (tudo mesclado; sem as células G) | [abrir no Colab](https://colab.research.google.com/github/Grazinascito/adaptive-cascade-routing/blob/main/notebook/adaptive_cascade_benchmark.ipynb) |
-| branch `004-component-g-evaluator` (inclui células G1–G4) | [abrir no Colab](https://colab.research.google.com/github/Grazinascito/adaptive-cascade-routing/blob/004-component-g-evaluator/notebook/adaptive_cascade_benchmark.ipynb) |
+| `main` (Marco 1/2: versão ASSIN 2 mesclada; sem as células NCM) | [abrir no Colab](https://colab.research.google.com/github/Grazinascito/adaptive-cascade-routing/blob/main/notebook/adaptive_cascade_benchmark.ipynb) |
+| branch `005-dataset-pivot-ncm` (pivot NCM: sonda + células B/C/F/G reescritas) | [abrir no Colab](https://colab.research.google.com/github/Grazinascito/adaptive-cascade-routing/blob/005-dataset-pivot-ncm/notebook/adaptive_cascade_benchmark.ipynb) |
 
 ---
 

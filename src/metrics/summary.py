@@ -34,9 +34,7 @@ def summarize(records: Sequence[BenchmarkRecord]) -> ScenarioSummary:
     """Aggregates the records of ONE scenario; S2 latencies from routed items only."""
     if not records:
         raise ValueError("records must not be empty")
-    s2_latencies = [
-        record.s2_latency_ms for record in records if record.s2_latency_ms is not None
-    ]
+    s2_latencies = [record.s2_latency_ms for record in records if record.s2_latency_ms is not None]
     return ScenarioSummary(
         n_items=len(records),
         accuracy=accuracy(records),
@@ -45,10 +43,6 @@ def summarize(records: Sequence[BenchmarkRecord]) -> ScenarioSummary:
         routed_to_s2_count=sum(1 for record in records if record.routed_to_s2),
         s2_call_rate=sum(1 for record in records if record.routed_to_s2) / len(records),
         decode_tokens_total=total_decode_tokens(records),
-        s1_latency_percentiles_ms=latency_percentiles(
-            [record.s1_latency_ms for record in records]
-        ),
-        s2_latency_percentiles_ms=(
-            latency_percentiles(s2_latencies) if s2_latencies else None
-        ),
+        s1_latency_percentiles_ms=latency_percentiles([record.s1_latency_ms for record in records]),
+        s2_latency_percentiles_ms=(latency_percentiles(s2_latencies) if s2_latencies else None),
     )

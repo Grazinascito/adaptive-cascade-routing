@@ -166,9 +166,7 @@ def _s2_only_record(sample: CatalogSample, output: System2Output) -> BenchmarkRe
     )
 
 
-def _cascade_record(
-    sample: CatalogSample, s1: System1Output, s2: System2Output
-) -> BenchmarkRecord:
+def _cascade_record(sample: CatalogSample, s1: System1Output, s2: System2Output) -> BenchmarkRecord:
     """Routed item: outputs from both systems; final = System 2."""
     return BenchmarkRecord(
         item_id=str(sample.sample_id),
@@ -193,14 +191,10 @@ def _cascade_record(
 class BenchmarkHarness:
     """Runs S1/S2 against a single server, with warmup and ThreadPool(8)."""
 
-    def __init__(
-        self, settings: BenchmarkSettings, *, client: httpx.Client | None = None
-    ) -> None:
+    def __init__(self, settings: BenchmarkSettings, *, client: httpx.Client | None = None) -> None:
         self._settings = settings
         self._owns_client = client is None
-        self._client = client if client is not None else httpx.Client(
-            timeout=SYSTEM2_TIMEOUT_S
-        )
+        self._client = client if client is not None else httpx.Client(timeout=SYSTEM2_TIMEOUT_S)
         self._s2_engine = System2Engine(
             base_url=settings.base_url,
             model=settings.model,
@@ -239,9 +233,7 @@ class BenchmarkHarness:
         for text in texts:
             self._system2(text)
 
-    def run_system1_scenario(
-        self, samples: Sequence[CatalogSample]
-    ) -> list[BenchmarkRecord]:
+    def run_system1_scenario(self, samples: Sequence[CatalogSample]) -> list[BenchmarkRecord]:
         """SC-A: System 1 alone on every item."""
         self.warmup(samples)
         outputs = run_parallel(
@@ -250,13 +242,10 @@ class BenchmarkHarness:
             max_workers=self._settings.max_workers,
         )
         return [
-            _s1_only_record(sample, output)
-            for sample, output in zip(samples, outputs, strict=True)
+            _s1_only_record(sample, output) for sample, output in zip(samples, outputs, strict=True)
         ]
 
-    def run_system2_scenario(
-        self, samples: Sequence[CatalogSample]
-    ) -> list[BenchmarkRecord]:
+    def run_system2_scenario(self, samples: Sequence[CatalogSample]) -> list[BenchmarkRecord]:
         """SC-B: System 2 alone on every item (no S1 suggestion)."""
         self.warmup(samples)
         outputs = run_parallel(
@@ -265,8 +254,7 @@ class BenchmarkHarness:
             max_workers=self._settings.max_workers,
         )
         return [
-            _s2_only_record(sample, output)
-            for sample, output in zip(samples, outputs, strict=True)
+            _s2_only_record(sample, output) for sample, output in zip(samples, outputs, strict=True)
         ]
 
     def run_cascade_scenario(
@@ -280,8 +268,7 @@ class BenchmarkHarness:
             max_workers=self._settings.max_workers,
         )
         routed_flags = [
-            not CascadeRouter.decide(output.top_probability, alpha)
-            for output in s1_outputs
+            not CascadeRouter.decide(output.top_probability, alpha) for output in s1_outputs
         ]
         routed_pairs = [
             (sample, output.top_choice)
@@ -305,9 +292,7 @@ class BenchmarkHarness:
                 records.append(_s1_only_record(sample, output))
         return records
 
-    def run_validation_phase(
-        self, samples: Sequence[CatalogSample]
-    ) -> list[BenchmarkRecord]:
+    def run_validation_phase(self, samples: Sequence[CatalogSample]) -> list[BenchmarkRecord]:
         """S1 and S2 exactly once per item; the alpha sweep is pure arithmetic.
 
         Each record carries both outputs (`routed_to_s2=True` marks that S2
@@ -321,8 +306,7 @@ class BenchmarkHarness:
             max_workers=self._settings.max_workers,
         )
         pairs = [
-            (sample, output.top_choice)
-            for sample, output in zip(samples, s1_outputs, strict=True)
+            (sample, output.top_choice) for sample, output in zip(samples, s1_outputs, strict=True)
         ]
         s2_outputs = run_parallel(
             lambda pair: self._system2(pair[0].raw_text, s1_suggested=pair[1]),
@@ -335,9 +319,7 @@ class BenchmarkHarness:
         ]
 
 
-def cascade_metrics_for_alpha(
-    records: Sequence[BenchmarkRecord], alpha: float
-) -> dict[str, float]:
+def cascade_metrics_for_alpha(records: Sequence[BenchmarkRecord], alpha: float) -> dict[str, float]:
     """Pure arithmetic over the saved outputs: accuracy, routing rate, tokens."""
     if not records:
         raise ValueError("records must not be empty")
@@ -424,8 +406,7 @@ def compute_kpis(
         "recovery_share": {
             "required": settings.recovery_share,
             "achieved": recovery,
-            "passed": recovery is not None
-            and recovery >= settings.recovery_share - GATE_EPSILON,
+            "passed": recovery is not None and recovery >= settings.recovery_share - GATE_EPSILON,
         },
         "token_share_vs_s2": {
             "required": settings.token_share_vs_s2,
@@ -466,8 +447,7 @@ def select_pilot_samples(
     tail = [sample for sample in samples if sample.is_long_tail]
     if len(head) < n_head or len(tail) < n_tail:
         raise ValueError(
-            f"pilot needs {n_head} head/{n_tail} tail items, "
-            f"got {len(head)}/{len(tail)}"
+            f"pilot needs {n_head} head/{n_tail} tail items, got {len(head)}/{len(tail)}"
         )
     return head[:n_head] + tail[:n_tail]
 
@@ -486,11 +466,7 @@ def run_pilot(
     records_b = harness.run_system2_scenario(pilot)
     tail_a = slice_accuracy(records_a, is_long_tail=True)
     tail_b = slice_accuracy(records_b, is_long_tail=True)
-    gap_pp = (
-        (tail_b - tail_a) * 100.0
-        if tail_a is not None and tail_b is not None
-        else None
-    )
+    gap_pp = (tail_b - tail_a) * 100.0 if tail_a is not None and tail_b is not None else None
     return PilotOutcome(
         n_items=len(pilot),
         n_tail=n_tail if n_tail is not None else PILOT_TAIL,
@@ -509,8 +485,7 @@ def format_pilot_report(outcome: PilotOutcome) -> str:
         return f"{value:.1%}" if value is not None else "n/a"
 
     gap_line = (
-        f"gap: {outcome.tail_gap_pp:.1f} pp "
-        f"(required >= {outcome.required_gap_pp:.1f} pp)"
+        f"gap: {outcome.tail_gap_pp:.1f} pp (required >= {outcome.required_gap_pp:.1f} pp)"
         if outcome.tail_gap_pp is not None
         else "gap: n/a (no tail items)"
     )
@@ -594,9 +569,7 @@ def execute_pilot(
     sets = build_benchmark_sets(settings, xlsx_path)
     harness = BenchmarkHarness(settings)
     try:
-        outcome = run_pilot(
-            harness, sets.validation, required_gap_pp=settings.tail_gap_pp
-        )
+        outcome = run_pilot(harness, sets.validation, required_gap_pp=settings.tail_gap_pp)
     finally:
         harness.close()
     print(format_pilot_report(outcome))

@@ -46,9 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--config", default=DEFAULT_CONFIG_PATH, help="path to benchmark_config.yaml"
     )
-    parser.add_argument(
-        "--pilot", action="store_true", help="run only the 100-item gate (SPEC §6)"
-    )
+    parser.add_argument("--pilot", action="store_true", help="run only the 100-item gate (SPEC §6)")
     parser.add_argument(
         "--alpha",
         type=float,

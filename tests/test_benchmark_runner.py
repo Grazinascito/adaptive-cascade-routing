@@ -70,9 +70,7 @@ class _FakeDaruBackend:
             top_alias = self._category_to_alias[category]
             p_top = 0.97
         rest = (1.0 - p_top) / (len(self._aliases) - 1)
-        probabilities = {
-            alias: p_top if alias == top_alias else rest for alias in self._aliases
-        }
+        probabilities = {alias: p_top if alias == top_alias else rest for alias in self._aliases}
         return {"answers": {"category": {"probabilities": probabilities}}}
 
     def chat(self, body: dict[str, object]) -> dict[str, object]:
@@ -83,9 +81,7 @@ class _FakeDaruBackend:
         text = user_content.split("Item: ", 1)[1].split("\n", 1)[0]
         category = self._by_text[text]
         predicted = (
-            _decoy_for(category)
-            if self.s2_fails_tail and len(text.strip()) <= 20
-            else category
+            _decoy_for(category) if self.s2_fails_tail and len(text.strip()) <= 20 else category
         )
         content = json.dumps(
             {
@@ -363,9 +359,9 @@ def test_cli_pilot_exit_code_and_gate_artifact(
     config["serving"]["base_url"] = fake_server
     monkeypatch.setattr(runner, "load_config", lambda path: config)
     monkeypatch.setattr(
-        runner, "build_benchmark_sets", lambda settings, xlsx_path: BenchmarkSets(
-            validation=samples, test=samples
-        )
+        runner,
+        "build_benchmark_sets",
+        lambda settings, xlsx_path: BenchmarkSets(validation=samples, test=samples),
     )
     monkeypatch.setattr(runner, "PILOT_HEAD", 10)
     monkeypatch.setattr(runner, "PILOT_TAIL", 2)

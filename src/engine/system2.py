@@ -66,8 +66,7 @@ def _match_category(raw_category: object, allowed_categories: Sequence[str]) -> 
         if _category_key(allowed) == raw_key:
             return allowed
     raise ValueError(
-        f"system 2 category {raw_category!r} is not in the allowed list "
-        f"{list(allowed_categories)}"
+        f"system 2 category {raw_category!r} is not in the allowed list {list(allowed_categories)}"
     )
 
 

@@ -39,9 +39,7 @@ def accuracy(records: Sequence[BenchmarkRecord]) -> float:
     return sum(1 for record in records if record.is_correct) / len(records)
 
 
-def slice_accuracy(
-    records: Sequence[BenchmarkRecord], *, is_long_tail: bool
-) -> float | None:
+def slice_accuracy(records: Sequence[BenchmarkRecord], *, is_long_tail: bool) -> float | None:
     """Accuracy restricted to one slice (tail = description with <= 20 characters).
 
     None when the slice has no records (head-only/tail-only scenario).

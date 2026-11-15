@@ -105,9 +105,9 @@ class TestSelectFoodCategories:
 
 def _big_pool() -> list[tuple[str, str]]:
     rows = fixture_rows()
-    heads = [
-        (f"CERVEJA ARTESANAL LAGOA SECA GARRAFA {i:03d}", "MERCEARIA") for i in range(30)
-    ] + [(f"IOGURTE MORANGO COPO 180G CASA {i:03d}", "FRIOS E LATICINIOS") for i in range(30)]
+    heads = [(f"CERVEJA ARTESANAL LAGOA SECA GARRAFA {i:03d}", "MERCEARIA") for i in range(30)] + [
+        (f"IOGURTE MORANGO COPO 180G CASA {i:03d}", "FRIOS E LATICINIOS") for i in range(30)
+    ]
     tails = [(f"REFRI {i:02d}", "MERCEARIA") for i in range(15)] + [
         (f"IOG {i:02d}", "FRIOS E LATICINIOS") for i in range(15)
     ]
@@ -173,9 +173,7 @@ class TestLoadCatalogBenchmarkSet:
         assert [s.raw_text for s in other.validation] != [s.raw_text for s in first.validation]
         assert [s.raw_text for s in other.test] != [s.raw_text for s in first.test]
 
-    def test_exactly_twenty_chars_is_tail_and_twenty_one_is_head(
-        self, tmp_path: Path
-    ) -> None:
+    def test_exactly_twenty_chars_is_tail_and_twenty_one_is_head(self, tmp_path: Path) -> None:
         rows = [
             ("A" * 20, "MERCEARIA"),
             ("B" * 20, "MERCEARIA"),
@@ -183,17 +181,13 @@ class TestLoadCatalogBenchmarkSet:
             ("D" * 22, "MERCEARIA"),
             ("E" * 23, "MERCEARIA"),
         ]
-        result = _load(
-            _write_pool_xlsx(tmp_path, rows), n_validation=2, n_test=2, head_share=0.5
-        )
+        result = _load(_write_pool_xlsx(tmp_path, rows), n_validation=2, n_test=2, head_share=0.5)
         samples = [*result.validation, *result.test]
         assert all(s.is_long_tail for s in samples if len(s.raw_text) == 20)
         assert all(not s.is_long_tail for s in samples if len(s.raw_text) >= 21)
         assert len(samples) == 4
 
-    def test_dedups_descriptions_case_insensitively_keeping_first(
-        self, tmp_path: Path
-    ) -> None:
+    def test_dedups_descriptions_case_insensitively_keeping_first(self, tmp_path: Path) -> None:
         rows = [
             ("PROD X", "MERCEARIA"),
             ("prod x", "FRIOS E LATICINIOS"),

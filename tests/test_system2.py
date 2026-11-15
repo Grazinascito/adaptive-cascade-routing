@@ -141,8 +141,7 @@ def test_fenced_json_is_parsed() -> None:
 
 def test_json_with_trailing_prose_is_parsed() -> None:
     noisy = (
-        f"{json.dumps(_VALID_PAYLOAD, ensure_ascii=False)}"
-        " Hope this helps with the classification!"
+        f"{json.dumps(_VALID_PAYLOAD, ensure_ascii=False)} Hope this helps with the classification!"
     )
     engine = _engine_returning(noisy, [])
 

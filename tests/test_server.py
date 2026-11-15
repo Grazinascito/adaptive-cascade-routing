@@ -35,9 +35,7 @@ def test_build_server_command_appends_extra_flags_in_order() -> None:
 
 
 def test_build_server_command_can_drop_prefix_caching() -> None:
-    command = server.build_server_command(
-        "Qwen/Qwen3-4B-AWQ", 8000, enable_prefix_caching=False
-    )
+    command = server.build_server_command("Qwen/Qwen3-4B-AWQ", 8000, enable_prefix_caching=False)
 
     assert "--enable-prefix-caching" not in command
 

@@ -120,8 +120,9 @@ def test_instruction_prefix_is_identical_across_requests() -> None:
     _evaluate(_uniform(), requests)
 
     assert requests[0]["body"]["instructions"] == requests[1]["body"]["instructions"]
-    assert requests[0]["body"]["questions"][system1.QUESTION_ID]["instructions"] == (
-        requests[1]["body"]["questions"][system1.QUESTION_ID]["instructions"]
+    assert (
+        requests[0]["body"]["questions"][system1.QUESTION_ID]["instructions"]
+        == (requests[1]["body"]["questions"][system1.QUESTION_ID]["instructions"])
     )
 
 

@@ -76,6 +76,8 @@ def test_benchmark_record_has_exactly_the_spec_fields() -> None:
         "s2_latency_ms",
         "final_prediction",
         "is_correct",
+        "s2_parse_ok",
+        "s2_category_fuzzy",
     ]
     assert [field.name for field in fields(BenchmarkRecord)] == expected
 

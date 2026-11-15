@@ -174,11 +174,11 @@ def harness(settings: BenchmarkSettings) -> Iterator[BenchmarkHarness]:
     engine.close()
 
 
-def test_every_record_dict_carries_all_16_fields(
+def test_every_record_dict_carries_all_record_fields(
     harness: BenchmarkHarness, samples: list[CatalogSample]
 ) -> None:
     field_names = {field.name for field in fields(BenchmarkRecord)}
-    assert len(field_names) == 16
+    assert len(field_names) == 18
 
     scenarios = [
         harness.run_system1_scenario(samples),

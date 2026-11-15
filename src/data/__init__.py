@@ -1,1 +1,1 @@
-"""Pacote de ingestão de dados: carregamento e formatação do dataset ASSIN 2."""
+"""Data ingestion package: benchmark dataset loading and formatting."""

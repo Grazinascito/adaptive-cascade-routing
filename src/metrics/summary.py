@@ -1,8 +1,8 @@
-"""Agregação pura por cenário (PR4): compõe as métricas do evaluator.
+"""Pure per-scenario aggregation (PR4): composes the evaluator metrics.
 
-Sem HTTP: `summarize` recebe os `BenchmarkRecord` de um cenário e devolve o
-`ScenarioSummary` com acurácia total/por corte, percentis de latência e soma
-de tokens de saída (spec DARU §5).
+No HTTP: `summarize` takes a scenario's `BenchmarkRecord`s and returns the
+`ScenarioSummary` with overall/slice accuracy, latency percentiles and the
+decode-token total (DARU spec §5).
 """
 
 from collections.abc import Sequence
@@ -31,7 +31,7 @@ class ScenarioSummary:
 
 
 def summarize(records: Sequence[BenchmarkRecord]) -> ScenarioSummary:
-    """Agrega os registros de UM cenário; latências do S2 só dos roteados."""
+    """Aggregates the records of ONE scenario; S2 latencies from routed items only."""
     if not records:
         raise ValueError("records must not be empty")
     s2_latencies = [

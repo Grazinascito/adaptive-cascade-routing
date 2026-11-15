@@ -1,8 +1,8 @@
-"""System2Engine (PR3): CoT+JSON via /v1/chat/completions, sem servidor real.
+"""System2Engine (PR3): CoT+JSON via /v1/chat/completions, no real server.
 
-Respostas vêm de httpx.MockTransport imitando o vLLM. Cobre happy path,
-cerca de markdown, prosa ao redor do JSON, validação de categoria contra a
-lista (com normalização de caixa/acentos), tokens do usage e latência.
+Responses come from httpx.MockTransport mimicking vLLM. Covers the happy
+path, markdown fences, prose around the JSON, category validation against
+the list (with case/accent normalization), usage tokens and latency.
 """
 
 import json
@@ -16,9 +16,9 @@ _BASE_URL = "http://testserver/v1"
 _ITEM = "APRESUNTADO REZENDE PEC KG"
 _CATEGORIES = ["MERCEARIA", "AÇOUGUE E PEIXARIA", "FRIOS E LATICINIOS"]
 _VALID_PAYLOAD: dict[str, str] = {
-    "reasoning": "Apresuntado é produto de carne suína em fates; fica no açougue.",
+    "reasoning": "Apresuntado is a pork deli meat; it belongs in AÇOUGUE E PEIXARIA.",
     "category": "AÇOUGUE E PEIXARIA",
-    "revisor_insight": "Nomes com 'apresuntado' apontam para AÇOUGUE E PEIXARIA.",
+    "revisor_insight": "Names containing 'apresuntado' point to AÇOUGUE E PEIXARIA.",
 }
 
 
@@ -142,7 +142,7 @@ def test_fenced_json_is_parsed() -> None:
 def test_json_with_trailing_prose_is_parsed() -> None:
     noisy = (
         f"{json.dumps(_VALID_PAYLOAD, ensure_ascii=False)}"
-        " Espero ter ajudado com a classificação!"
+        " Hope this helps with the classification!"
     )
     engine = _engine_returning(noisy, [])
 
@@ -181,7 +181,7 @@ def test_missing_optional_fields_default_to_empty_strings() -> None:
 
 
 def test_non_json_content_raises() -> None:
-    engine = _engine_returning("MERCEARIA parece boa.", [])
+    engine = _engine_returning("MERCEARIA looks right.", [])
 
     with pytest.raises(ValueError, match="not a parsable JSON object"):
         engine.reason(_ITEM, _CATEGORIES)

@@ -1,8 +1,8 @@
-"""Testes de fundação: contrato congelado do benchmark DARU em config/benchmark_config.yaml.
+"""Foundation tests: the frozen DARU contract in config/benchmark_config.yaml.
 
-`load_benchmark_config` é o helper reutilizável: outros arquivos de teste podem
-importá-lo (`from tests.test_config import load_benchmark_config`) — o YAML é
-lido uma única vez por processo.
+`load_benchmark_config` is the reusable helper: other test files can import
+it (`from tests.test_config import load_benchmark_config`) — the YAML is
+read once per process.
 """
 
 import re
@@ -13,8 +13,8 @@ import yaml
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "benchmark_config.yaml"
 
-# Mesmo padrão de não-comida do loader (src/data/loader.py); duplicado aqui de
-# propósito para o teste não herdar um bug do módulo que deveria pegar.
+# Same non-food pattern as the loader (src/data/loader.py); duplicated here on
+# purpose so the test does not inherit a bug from the module it should catch.
 _NON_FOOD_TERMS = re.compile(
     r"LIMPEZA|HIGIENE|COSMET|PET|BAZAR|ELETRO|PAPELARIA|UTENSIL|VESTU|CALCAD|"
     r"TEXTIL|FARMA|JOIA|BRINQUEDO|ESPORT|AUTO|MOVEIS|JARDIM|LIVROS",
@@ -40,7 +40,7 @@ def test_config_contains_every_section_the_spec_requires() -> None:
         "metrics",
         "kpis",
     ):
-        assert section in config, f"seção '{section}' faltando em benchmark_config.yaml"
+        assert section in config, f"section '{section}' missing from benchmark_config.yaml"
 
 
 def test_dataset_freezes_the_daru_contract() -> None:
@@ -60,7 +60,7 @@ def test_dataset_freezes_the_daru_contract() -> None:
 def test_categories_exclude_non_food_names() -> None:
     categories = load_benchmark_config()["dataset"]["categories"]
     for name in categories:
-        assert not _NON_FOOD_TERMS.search(name), f"categoria não-comida pinada: {name}"
+        assert not _NON_FOOD_TERMS.search(name), f"non-food category picked: {name}"
 
 
 def test_model_and_router_freeze_qwen3_awq_and_alpha() -> None:

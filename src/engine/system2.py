@@ -1,10 +1,11 @@
-"""System2Engine — slow-path da cascata DARU: CoT + JSON estrito via /v1/chat/completions.
+"""System2Engine — DARU cascade slow path: CoT + strict JSON via /v1/chat/completions.
 
-Recebe o texto do item, a lista fechada de categorias do benchmark e a
-sugestão opcional do System 1; devolve categoria validada contra a lista
-(normalização de caixa/acentos), o raciocínio e o revisor_insight. O parse
-tolera cerca de markdown e prosa ao redor do JSON (lição do commit 556000a);
-categoria fora da lista levanta `ValueError` — sem fallback silencioso.
+Takes the item text, the benchmark's closed category list and the optional
+System 1 suggestion; returns the category validated against the list
+(case/accent normalization), the reasoning and the revisor_insight. Parsing
+tolerates markdown fences and prose around the JSON (lesson from commit
+556000a); a category outside the list raises `ValueError` — no silent
+fallback.
 """
 
 import json
@@ -36,8 +37,8 @@ SYSTEM2_SYSTEM_PROMPT: Final = (
     "Não invente categorias fora da lista fornecida."
 )
 
-# Cerca de markdown (```json ... ```) observada envolvendo o JSON do
-# Qwen3-4B-AWQ no histórico do repo (commit 556000a); removida antes do parse.
+# Markdown fence (```json ... ```) seen wrapping the JSON of Qwen3-4B-AWQ in
+# the repo history (commit 556000a); stripped before parsing.
 _FENCE_PATTERN: Final = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
@@ -57,7 +58,7 @@ def _category_key(category: str) -> str:
 
 
 def _match_category(raw_category: object, allowed_categories: Sequence[str]) -> str:
-    """Devolve a grafia canônica da categoria; `ValueError` se fora da lista."""
+    """Returns the canonical spelling of the category; `ValueError` if outside the list."""
     if not isinstance(raw_category, str):
         raise ValueError(f"system 2 'category' must be a string, got {raw_category!r}")
     raw_key = _category_key(raw_category)
@@ -86,10 +87,11 @@ def _braces_span(text: str) -> str | None:
 def _parse_system2_response(
     content: object, allowed_categories: Sequence[str]
 ) -> tuple[str, str, str]:
-    """Extrai (reasoning, category, revisor_insight) do conteúdo do modelo.
+    """Extracts (reasoning, category, revisor_insight) from the model content.
 
-    Tenta `json.loads` no texto (com e sem cerca de markdown) e, se a prosa
-    cercar o objeto, no trecho entre a primeira `{` e a última `}`.
+    Tries `json.loads` on the text (with and without the markdown fence)
+    and, when prose surrounds the object, on the span from the first `{`
+    to the last `}`.
     """
     text = content if isinstance(content, str) else ""
     candidates = [_strip_markdown_fence(text), _braces_span(text)]
@@ -136,7 +138,7 @@ def _render_user_content(
 
 
 class System2Engine:
-    """Cliente do slow-path: CoT + JSON estrito, temperatura 0, thinking off."""
+    """Slow-path client: CoT + strict JSON, temperature 0, thinking off."""
 
     def __init__(
         self,
@@ -176,8 +178,9 @@ class System2Engine:
             ],
             "max_tokens": self._max_tokens,
             "temperature": self._temperature,
-            # Qwen3 "original" pensa por padrão no template de chat; sem isso o
-            # conteúdo vem precedido de blocos <think> e quebra o parse do JSON.
+            # Qwen3 "original" thinks by default in its chat template; without
+            # this the content comes prefixed with <think> blocks and breaks
+            # the JSON parse.
             "chat_template_kwargs": {"enable_thinking": False},
         }
 

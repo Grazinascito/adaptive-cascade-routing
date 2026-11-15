@@ -1,12 +1,12 @@
-"""Smoke ponta a ponta do orquestrador do benchmark (PR5) contra HTTP falso.
+"""End-to-end smoke test of the benchmark orchestrator (PR5) against fake HTTP.
 
-Um threading http.server imita as formas de resposta do vLLM em
-/v1/systemone (probabilidades por apelido, como o System1Engine espera) e
-/v1/chat/completions (JSON com reasoning/category/revisor_insight, como o
-System2Engine espera). Comportamento canned: o System 1 confia (0.97) e acerta
-na cabeça, erra com confiança baixa na cauda (0.72 / 0.88); o System 2 acerta
-tudo — ou erra a cauda no modo `s2_fails_tail`, para o caminho reprovado do
-gate do pilot.
+A threading http.server mimics vLLM's response shapes on /v1/systemone
+(per-alias probabilities, as System1Engine expects) and
+/v1/chat/completions (JSON with reasoning/category/revisor_insight, as
+System2Engine expects). Canned behavior: System 1 is confident (0.97) and
+correct on the head, wrong with low confidence on the tail (0.72 / 0.88);
+System 2 gets everything right — or misses the tail in `s2_fails_tail`
+mode, for the pilot gate's failure path.
 """
 
 import copy
@@ -45,7 +45,7 @@ def _decoy_for(category: str) -> str:
 
 
 class _FakeDaruBackend:
-    """Respostas canned dos dois endpoints, determinísticas por texto do item."""
+    """Canned responses from both endpoints, deterministic by item text."""
 
     def __init__(self, categories: list[str], *, s2_fails_tail: bool = False) -> None:
         alias_to_category = assign_aliases(categories)
@@ -89,9 +89,9 @@ class _FakeDaruBackend:
         )
         content = json.dumps(
             {
-                "reasoning": f"analisei '{text}' passo a passo",
+                "reasoning": f"analyzed '{text}' step by step",
                 "category": predicted,
-                "revisor_insight": "regra genérica do fake",
+                "revisor_insight": "generic fake rule",
             },
             ensure_ascii=False,
         )
@@ -104,7 +104,7 @@ class _FakeDaruBackend:
 class _FakeVLLMHandler(BaseHTTPRequestHandler):
     backend: _FakeDaruBackend
 
-    def do_POST(self) -> None:  # noqa: N802 - nome exigido pelo http.server
+    def do_POST(self) -> None:  # noqa: N802 - name required by http.server
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length))
         if self.path.endswith("/systemone"):
@@ -145,7 +145,7 @@ def fake_server(backend: _FakeDaruBackend) -> Iterator[str]:
 
 @pytest.fixture()
 def samples(backend: _FakeDaruBackend) -> list[CatalogSample]:
-    """12 itens do fixture: 10 cabeça + 2 cauda, todos nas 12 categorias."""
+    """12 fixture items: 10 head + 2 tail, all within the 12 categories."""
     rows = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     categories = set(_load_config()["dataset"]["categories"])
     eligible = [row for row in rows if row["categoria"] in categories]
@@ -348,7 +348,7 @@ def test_pilot_gate_passes_then_fails_when_s2_loses_the_tail(
     assert failed.passed is False
     assert failed.s2_tail_accuracy == pytest.approx(0.0)
     assert failed.tail_gap_pp == pytest.approx(0.0)
-    assert "GATE: REPROVADO" in runner.format_pilot_report(failed)
+    assert "GATE: FAILED" in runner.format_pilot_report(failed)
 
 
 def test_cli_pilot_exit_code_and_gate_artifact(
@@ -372,10 +372,10 @@ def test_cli_pilot_exit_code_and_gate_artifact(
     monkeypatch.chdir(tmp_path)
 
     assert run_module.main(["--config", "cfg.yaml", "--pilot"]) == 0
-    assert "GATE: PASSOU" in capsys.readouterr().out
+    assert "GATE: PASSED" in capsys.readouterr().out
     gate = json.loads((tmp_path / "results" / "pilot_gate.json").read_text(encoding="utf-8"))
     assert gate["passed"] is True
 
     backend.s2_fails_tail = True
     assert run_module.main(["--config", "cfg.yaml", "--pilot"]) == 1
-    assert "GATE: REPROVADO" in capsys.readouterr().out
+    assert "GATE: FAILED" in capsys.readouterr().out

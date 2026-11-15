@@ -1,7 +1,8 @@
-"""Métricas puras do benchmark DARU (PR4) e o registro bruto por item.
+"""Pure metrics for the DARU benchmark (PR4) and the raw per-item record.
 
-Sem HTTP e sem router: recebem `BenchmarkRecord` prontos (ou números) para
-serem testáveis isoladamente. `summary.py` compõe estas funções por cenário.
+No HTTP and no router: they receive ready `BenchmarkRecord`s (or numbers)
+so they can be tested in isolation. `summary.py` composes these functions
+per scenario.
 """
 
 import math
@@ -11,7 +12,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkRecord:
-    """Medições de um item nos três papéis da cascata (spec DARU §5)."""
+    """One item's measurements across the three cascade roles (DARU spec §5)."""
 
     item_id: str
     raw_text: str
@@ -32,7 +33,7 @@ class BenchmarkRecord:
 
 
 def accuracy(records: Sequence[BenchmarkRecord]) -> float:
-    """Fração de acertos (`is_correct`) sobre todos os registros."""
+    """Fraction of correct records (`is_correct`) over all records."""
     if not records:
         raise ValueError("records must not be empty")
     return sum(1 for record in records if record.is_correct) / len(records)
@@ -41,9 +42,9 @@ def accuracy(records: Sequence[BenchmarkRecord]) -> float:
 def slice_accuracy(
     records: Sequence[BenchmarkRecord], *, is_long_tail: bool
 ) -> float | None:
-    """Acurácia restrita a um corte (cauda = descrição com <= 20 caracteres).
+    """Accuracy restricted to one slice (tail = description with <= 20 characters).
 
-    None quando o corte não tem registros (cenário só-cabeça/só-cauda).
+    None when the slice has no records (head-only/tail-only scenario).
     """
     selected = [record for record in records if record.is_long_tail == is_long_tail]
     if not selected:
@@ -52,10 +53,11 @@ def slice_accuracy(
 
 
 def apgr(acc_s1: float, acc_s2: float, acc_cascade: float) -> float | None:
-    """Average Performance Gap Recovered (RouteLLM, spec DARU §5).
+    """Average Performance Gap Recovered (RouteLLM, DARU spec §5).
 
-    None quando o denominador (gap S2 − S1) é <= 0: sem gap não há nada a
-    recuperar, e gap negativo (S1 >= S2) torna a razão sem sentido.
+    None when the denominator (gap S2 − S1) is <= 0: with no gap there is
+    nothing to recover, and a negative gap (S1 >= S2) makes the ratio
+    meaningless.
     """
     gap = acc_s2 - acc_s1
     if gap <= 0.0:
@@ -64,9 +66,10 @@ def apgr(acc_s1: float, acc_s2: float, acc_cascade: float) -> float | None:
 
 
 def percentile(values: Sequence[float], q: float) -> float:
-    """Percentil q (0–100) com interpolação linear, estilo numpy.
+    """q-th percentile (0–100) with linear interpolation, numpy-style.
 
-    rank = q/100 * (n − 1); entre dois vizinhos, pondera pela fração do rank.
+    rank = q/100 * (n − 1); between two neighbors, weight by the rank
+    fraction.
     """
     if not values:
         raise ValueError("values must not be empty")
@@ -85,7 +88,7 @@ def percentile(values: Sequence[float], q: float) -> float:
 
 
 def latency_percentiles(values: Sequence[float]) -> dict[str, float]:
-    """p50/p95/p99 exigidos pela spec DARU §5 (interpolação linear)."""
+    """p50/p95/p99 required by DARU spec §5 (linear interpolation)."""
     return {
         "p50": percentile(values, 50),
         "p95": percentile(values, 95),
@@ -94,5 +97,5 @@ def latency_percentiles(values: Sequence[float]) -> dict[str, float]:
 
 
 def total_decode_tokens(records: Sequence[BenchmarkRecord]) -> int:
-    """Soma dos tokens de saída do System 2 (itens não roteados contam 0)."""
+    """Sum of System 2 decode tokens (unrouted items count as 0)."""
     return sum(record.s2_decode_tokens or 0 for record in records)

@@ -1,1 +1,1 @@
-"""Orquestrador do benchmark DARU (PR5): `runner` + CLI em `run`."""
+"""DARU benchmark orchestration (PR5): `runner` + CLI in `run`."""

@@ -1,10 +1,10 @@
-"""Orquestrador do benchmark DARU (PR5): loader + engines + router + métricas.
+"""DARU benchmark orchestrator (PR5): loader + engines + router + metrics.
 
-Dois modos (SPEC-DARU.md §5–6): o pilot (100 itens de validação, gate de cauda
-antes de gastar GPU no run completo) e o run completo — validação 200 com S1 e
-S2 medidos uma única vez e varredura de α por aritmética pura sobre as saídas
-salvas, depois teste congelado 600 nos cenários SC-A/SC-B/SC-C. O resultado
-vai para results/raw_benchmark_data.json.
+Two modes (SPEC-DARU.md §5–6): the pilot (100 validation items, tail gate
+before spending GPU on the full run) and the full run — validation 200 with
+S1 and S2 measured exactly once and the α sweep as pure arithmetic over the
+saved outputs, then the frozen 600-item test on scenarios SC-A/SC-B/SC-C.
+Results go to results/raw_benchmark_data.json.
 """
 
 import json
@@ -47,7 +47,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class BenchmarkSettings:
-    """Contrato congelado do config/benchmark_config.yaml já validado e tipado."""
+    """The frozen contract of config/benchmark_config.yaml, validated and typed."""
 
     categories: tuple[str, ...]
     model: str
@@ -88,7 +88,7 @@ class BenchmarkSettings:
 
 
 def build_benchmark_sets(settings: BenchmarkSettings, xlsx_path: str | Path) -> BenchmarkSets:
-    """Amostra validação+teste congelados (SPEC-DARU.md §3) com o seed do config."""
+    """Samples the frozen validation+test sets (SPEC-DARU.md §3) with the config seed."""
     return load_catalog_benchmark_set(
         xlsx_path,
         settings.categories,
@@ -103,7 +103,7 @@ def build_benchmark_sets(settings: BenchmarkSettings, xlsx_path: str | Path) -> 
 def run_parallel[TIn, TOut](
     fn: Callable[[TIn], TOut], items: Sequence[TIn], *, max_workers: int
 ) -> list[TOut]:
-    """Map com paralelismo moderado; a primeira exceção propaga."""
+    """Map with moderate parallelism; the first exception propagates."""
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         return list(executor.map(fn, items))
 
@@ -145,7 +145,7 @@ def _s1_only_record(sample: CatalogSample, output: System1Output) -> BenchmarkRe
 
 
 def _s2_only_record(sample: CatalogSample, output: System2Output) -> BenchmarkRecord:
-    """SC-B: sem chamada ao System 1 — os campos s1 ficam nos valores vazios."""
+    """SC-B: no System 1 call — the s1 fields stay at their empty values."""
     return BenchmarkRecord(
         item_id=str(sample.sample_id),
         raw_text=sample.raw_text,
@@ -169,7 +169,7 @@ def _s2_only_record(sample: CatalogSample, output: System2Output) -> BenchmarkRe
 def _cascade_record(
     sample: CatalogSample, s1: System1Output, s2: System2Output
 ) -> BenchmarkRecord:
-    """Item roteado: saídas dos dois sistemas; final = System 2."""
+    """Routed item: outputs from both systems; final = System 2."""
     return BenchmarkRecord(
         item_id=str(sample.sample_id),
         raw_text=sample.raw_text,
@@ -191,7 +191,7 @@ def _cascade_record(
 
 
 class BenchmarkHarness:
-    """Executa S1/S2 contra um único servidor, com warmup e ThreadPool(8)."""
+    """Runs S1/S2 against a single server, with warmup and ThreadPool(8)."""
 
     def __init__(
         self, settings: BenchmarkSettings, *, client: httpx.Client | None = None
@@ -229,7 +229,7 @@ class BenchmarkHarness:
         )
 
     def warmup(self, samples: Sequence[CatalogSample]) -> None:
-        """Requisições descartadas por engine antes de cada cenário medido."""
+        """Requests discarded by each engine before every measured scenario."""
         texts = [
             samples[index % len(samples)].raw_text
             for index in range(self._settings.warmup_requests)
@@ -242,7 +242,7 @@ class BenchmarkHarness:
     def run_system1_scenario(
         self, samples: Sequence[CatalogSample]
     ) -> list[BenchmarkRecord]:
-        """SC-A: System 1 sozinho em todos os itens."""
+        """SC-A: System 1 alone on every item."""
         self.warmup(samples)
         outputs = run_parallel(
             lambda sample: self._system1(sample.raw_text),
@@ -257,7 +257,7 @@ class BenchmarkHarness:
     def run_system2_scenario(
         self, samples: Sequence[CatalogSample]
     ) -> list[BenchmarkRecord]:
-        """SC-B: System 2 sozinho em todos os itens (sem sugestão do S1)."""
+        """SC-B: System 2 alone on every item (no S1 suggestion)."""
         self.warmup(samples)
         outputs = run_parallel(
             lambda sample: self._system2(sample.raw_text),
@@ -272,7 +272,7 @@ class BenchmarkHarness:
     def run_cascade_scenario(
         self, samples: Sequence[CatalogSample], *, alpha: float
     ) -> list[BenchmarkRecord]:
-        """SC-C: S1 em todos, S2 só nos itens com P_top < alpha (regra R_alpha)."""
+        """SC-C: S1 on every item, S2 only where P_top < alpha (rule R_alpha)."""
         self.warmup(samples)
         s1_outputs = run_parallel(
             lambda sample: self._system1(sample.raw_text),
@@ -308,11 +308,11 @@ class BenchmarkHarness:
     def run_validation_phase(
         self, samples: Sequence[CatalogSample]
     ) -> list[BenchmarkRecord]:
-        """S1 e S2 uma única vez por item; o sweep de alpha é aritmética pura.
+        """S1 and S2 exactly once per item; the alpha sweep is pure arithmetic.
 
-        Cada registro carrega as duas saídas (`routed_to_s2=True` marca que o S2
-        está disponível); o roteamento real por alpha é decidido depois, sem
-        novas chamadas HTTP.
+        Each record carries both outputs (`routed_to_s2=True` marks that S2
+        is available); the actual per-alpha routing is decided later with no
+        further HTTP calls.
         """
         self.warmup(samples)
         s1_outputs = run_parallel(
@@ -338,7 +338,7 @@ class BenchmarkHarness:
 def cascade_metrics_for_alpha(
     records: Sequence[BenchmarkRecord], alpha: float
 ) -> dict[str, float]:
-    """Arimética pura sobre as saídas salvas: acurácia, taxa roteada, tokens."""
+    """Pure arithmetic over the saved outputs: accuracy, routing rate, tokens."""
     if not records:
         raise ValueError("records must not be empty")
     n_correct = 0
@@ -361,7 +361,7 @@ def cascade_metrics_for_alpha(
 
 
 def best_alpha(metrics: Mapping[str, Mapping[str, float]]) -> float:
-    """Maior acurácia da cascata; empate decide pelo menor custo de tokens."""
+    """Highest cascade accuracy; ties broken by lowest token cost."""
     if not metrics:
         raise ValueError("metrics must not be empty")
     chosen = min(
@@ -383,7 +383,7 @@ def alpha_sweep(
     return {
         "alphas": metrics,
         "best_alpha": best_alpha(metrics),
-        "rule": "maior acurácia da cascata; empate decide pelo menor custo de tokens",
+        "rule": "highest cascade accuracy; ties broken by lowest token cost",
     }
 
 
@@ -396,11 +396,11 @@ def compute_kpis(
     records_c: Sequence[BenchmarkRecord],
     settings: BenchmarkSettings,
 ) -> dict[str, Any]:
-    """Gates medidos uma única vez no teste congelado (SPEC-DARU.md §1).
+    """Gates measured once on the frozen test set (SPEC-DARU.md §1).
 
-    Comparações com tolerância de `GATE_EPSILON`: as métricas vêm de divisões
-    de inteiros em ponto flutuante, e um gate no limite exato (APGR = 0.5)
-    não pode reprovar por erro de arredondamento.
+    Comparisons use a `GATE_EPSILON` tolerance: the metrics come from
+    float divisions of integers, and a gate at the exact limit (APGR = 0.5)
+    must not fail due to rounding.
     """
     summary_a = summarize(records_a)
     summary_b = summarize(records_b)
@@ -438,7 +438,7 @@ def compute_kpis(
 
 @dataclass(frozen=True)
 class PilotOutcome:
-    """Resultado do gate de 100 itens (SPEC-DARU.md §6)."""
+    """Outcome of the 100-item gate (SPEC-DARU.md §6)."""
 
     n_items: int
     n_tail: int
@@ -457,7 +457,7 @@ def select_pilot_samples(
     n_head: int | None = None,
     n_tail: int | None = None,
 ) -> list[CatalogSample]:
-    """Primeiros itens de validação estratificados cabeça/cauda (70/30)."""
+    """First validation items stratified head/tail (70/30)."""
     if n_head is None:
         n_head = PILOT_HEAD
     if n_tail is None:
@@ -480,7 +480,7 @@ def run_pilot(
     n_head: int | None = None,
     n_tail: int | None = None,
 ) -> PilotOutcome:
-    """SC-A e SC-B nos itens do pilot; gate = S2 supera S1 na cauda em >= X pp."""
+    """SC-A and SC-B on the pilot items; gate = S2 beats S1 on the tail by >= X pp."""
     pilot = select_pilot_samples(validation_samples, n_head=n_head, n_tail=n_tail)
     records_a = harness.run_system1_scenario(pilot)
     records_b = harness.run_system2_scenario(pilot)
@@ -510,19 +510,19 @@ def format_pilot_report(outcome: PilotOutcome) -> str:
 
     gap_line = (
         f"gap: {outcome.tail_gap_pp:.1f} pp "
-        f"(necessário >= {outcome.required_gap_pp:.1f} pp)"
+        f"(required >= {outcome.required_gap_pp:.1f} pp)"
         if outcome.tail_gap_pp is not None
-        else "gap: n/a (sem itens de cauda)"
+        else "gap: n/a (no tail items)"
     )
     return "\n".join(
         [
             "== PILOT (SPEC-DARU.md §6) ==",
-            f"itens: {outcome.n_items} ({outcome.n_items - outcome.n_tail} cabeça / "
-            f"{outcome.n_tail} cauda)",
-            f"acurácia na cauda — System 1: {_pct(outcome.s1_tail_accuracy)} | "
+            f"items: {outcome.n_items} ({outcome.n_items - outcome.n_tail} head / "
+            f"{outcome.n_tail} tail)",
+            f"tail accuracy — System 1: {_pct(outcome.s1_tail_accuracy)} | "
             f"System 2: {_pct(outcome.s2_tail_accuracy)}",
             gap_line,
-            "GATE: PASSOU" if outcome.passed else "GATE: REPROVADO",
+            "GATE: PASSED" if outcome.passed else "GATE: FAILED",
         ]
     )
 
@@ -550,7 +550,7 @@ def assemble_payload(
     records_b: Sequence[BenchmarkRecord],
     records_c: Sequence[BenchmarkRecord],
 ) -> dict[str, Any]:
-    """Monta o raw_benchmark_data.json: meta, cenários, sweep, sumários, gates."""
+    """Assembles raw_benchmark_data.json: meta, scenarios, sweep, summaries, gates."""
     return {
         "meta": {
             "started_at": started_at,
@@ -590,7 +590,7 @@ def execute_pilot(
     xlsx_path: str | Path,
     results_path: str | Path = PILOT_RESULTS_PATH,
 ) -> int:
-    """Roda o pilot, imprime o gate e devolve o código de saída (0 passou)."""
+    """Runs the pilot, prints the gate and returns the exit code (0 = passed)."""
     sets = build_benchmark_sets(settings, xlsx_path)
     harness = BenchmarkHarness(settings)
     try:
@@ -613,7 +613,7 @@ def execute_full_benchmark(
     results_path: str | Path = RESULTS_PATH,
     repo_root: str | Path = ".",
 ) -> dict[str, Any]:
-    """Validação (sweep de alpha) + teste congelado nos três cenários."""
+    """Validation (alpha sweep) + frozen test across the three scenarios."""
     started_at = datetime.now(UTC)
     sets = build_benchmark_sets(settings, xlsx_path)
     harness = BenchmarkHarness(settings)

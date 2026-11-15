@@ -1,4 +1,4 @@
-"""Métricas puras (PR4): acurácia por corte, APGR, percentis e soma de tokens."""
+"""Pure metrics (PR4): per-slice accuracy, APGR, percentiles and token totals."""
 
 from dataclasses import fields
 
@@ -28,7 +28,7 @@ def _record(
 ) -> BenchmarkRecord:
     return BenchmarkRecord(
         item_id=item_id,
-        raw_text=f"texto do item {item_id}",
+        raw_text=f"item text {item_id}",
         canonical_category="MERCEARIA",
         is_long_tail=is_long_tail,
         s1_prediction="MERCEARIA",
@@ -37,7 +37,7 @@ def _record(
         s1_latency_ms=s1_latency_ms,
         routed_to_s2=routed,
         s2_prediction="MERCEARIA" if routed else None,
-        s2_reasoning="regra curta" if routed else None,
+        s2_reasoning="short rule" if routed else None,
         s2_revisor_insight="insight" if routed else None,
         s2_decode_tokens=decode_tokens,
         s2_latency_ms=s2_latency_ms,

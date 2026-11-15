@@ -1,11 +1,10 @@
-"""Loader DARU — parseia DATASETPRODUTOSVAREJOBRASIL.xlsx e amostra os conjuntos congelados.
+"""DARU loader — parses DATASETPRODUTOSVAREJOBRASIL.xlsx and samples the frozen sets.
 
-Pivot de dataset (2026-11-15, SPEC-DARU.md): o benchmark resolve "descrição de
-item de catálogo → categoria" sobre o DARU (18 maiores varejistas do Brasil,
-Darú et al. 2022). O Excel veio com as 5 colunas embolidas em 1 célula; a
-regra de leitura é csv (delimiter=';', quotechar='"') mantendo só linhas com
-exatamente 5 campos: descrição, segmento, categoria, subcategoria, produto
-canônico.
+Dataset pivot (2026-11-15, SPEC-DARU.md): the benchmark solves "catalog item
+description → category" on DARU (18 largest Brazilian retailers, Darú et al.
+2022). The Excel ships the 5 columns squashed into 1 cell; the reading rule
+is csv (delimiter=';', quotechar='"') keeping only rows with exactly 5
+fields: description, segment, category, subcategory, canonical product.
 """
 
 import csv
@@ -23,8 +22,8 @@ DARU_XLSX_FILENAME = "DATASETPRODUTOSVAREJOBRASIL.xlsx"
 
 _CATEGORIA_PREFIX = re.compile(r"^\d+\s*-\s*")
 
-# Categorias de não-comida/bebida fora do escopo do benchmark (SPEC-DARU.md §2:
-# escopo = comida e bebida, como no contexto do iFood).
+# Non-food/beverage categories out of benchmark scope (SPEC-DARU.md §2:
+# scope = food and beverage, as in the iFood context).
 _NON_FOOD_PATTERN = re.compile(
     r"LIMPEZA|HIGIENE|COSMET|PET|BAZAR|ELETRO|PAPELARIA|UTENSIL|VESTU|CALCAD|"
     r"TEXTIL|FARMA|JOIA|BRINQUEDO|ESPORT|AUTO|MOVEIS|JARDIM|LIVROS|BABY",
@@ -35,12 +34,12 @@ DaruRow = tuple[str, str]
 
 
 class DatasetDownloadError(Exception):
-    """Falha ao baixar ou localizar o xlsx do DARU no kagglehub."""
+    """Failed to download or locate the DARU xlsx via kagglehub."""
 
 
 @dataclass(frozen=True)
 class CatalogSample:
-    """Item do conjunto congelado (nível de rótulo: categoria)."""
+    """Item of the frozen set (label level: category)."""
 
     sample_id: int
     raw_text: str
@@ -50,17 +49,17 @@ class CatalogSample:
 
 @dataclass(frozen=True)
 class BenchmarkSets:
-    """Conjuntos congelados: validação (escolha do α) e teste (número final)."""
+    """Frozen sets: validation (α selection) and test (final number)."""
 
     validation: list[CatalogSample]
     test: list[CatalogSample]
 
 
 def parse_daru_cell(cell: str) -> DaruRow | None:
-    """Separa uma célula embolida em (descrição, categoria); None se não casar.
+    """Splits a squashed cell into (description, category); None on no match.
 
-    Só células com exatamente 5 campos entram (79% do arquivo segundo a spec);
-    o prefixo numérico da categoria ("6-MERCEARIA") é removido.
+    Only cells with exactly 5 fields pass (79% of the file per the spec);
+    the category's numeric prefix ("6-MERCEARIA") is stripped.
     """
     fields = next(csv.reader([cell], delimiter=";", quotechar='"'), [])
     if len(fields) != 5:
@@ -73,9 +72,9 @@ def parse_daru_cell(cell: str) -> DaruRow | None:
 
 
 def parse_daru_xlsx(path: str | Path) -> list[DaruRow]:
-    """Lê o xlsx de coluna única e devolve as linhas (descrição, categoria).
+    """Reads the single-column xlsx and returns the (description, category) rows.
 
-    A primeira célula não vazia é o cabeçalho e fica fora.
+    The first non-empty cell is the header and is skipped.
     """
     workbook = load_workbook(path, read_only=True)
     try:
@@ -100,10 +99,10 @@ def parse_daru_xlsx(path: str | Path) -> list[DaruRow]:
 def select_food_categories(
     rows: Sequence[DaruRow], n: int = 12, min_rows: int = 500
 ) -> list[tuple[str, int]]:
-    """Top-n categorias por contagem, fora as de não-comida/bebida.
+    """Top-n categories by count, excluding non-food/beverage ones.
 
-    Exclui nomes que casam com o padrão de não-comida (limpeza, higiene, pet,
-    bazar etc.) e categorias com menos de `min_rows` exemplos.
+    Drops names matching the non-food pattern (cleaning, hygiene, pet,
+    bazaar etc.) and categories with fewer than `min_rows` examples.
     """
     counts = Counter(categoria for _, categoria in rows)
     eligible = [
@@ -125,15 +124,15 @@ def load_catalog_benchmark_set(
     tail_max_chars: int,
     seed: int,
 ) -> BenchmarkSets:
-    """Amostra validação e teste estratificados cabeça/cauda (SPEC-DARU.md §3).
+    """Samples the stratified head/tail validation and test sets (SPEC-DARU.md §3).
 
-    Pipeline: parse → filtro pelo conjunto fechado de categorias → dedup
-    case-insensitive de descrição (primeira ocorrência vence) → estratos
-    cabeça (> `tail_max_chars`) e cauda (<= `tail_max_chars`) ordenados por
-    descrição → sorteio com `random.Random(seed)`: validação primeiro, teste
-    sobre o que sobrou (sem sobreposição). Cada conjunto recebe
-    `round(n * head_share)` itens de cabeça e o resto de cauda. `sample_id` é
-    sequencial na ordem final (validação, depois teste).
+    Pipeline: parse → filter by the closed category set → case-insensitive
+    description dedup (first occurrence wins) → head (> `tail_max_chars`)
+    and tail (<= `tail_max_chars`) strata sorted by description → draw with
+    `random.Random(seed)`: validation first, test from what remains (no
+    overlap). Each set gets `round(n * head_share)` head items and the rest
+    tail. `sample_id` is sequential in the final order (validation, then
+    test).
     """
     if n_validation <= 0 or n_test <= 0:
         raise ValueError(f"n_validation and n_test must be positive, got {n_validation}/{n_test}")

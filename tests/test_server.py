@@ -1,7 +1,7 @@
-"""Testes do argv do servidor vLLM DARU (PR5): só construção de comando.
+"""Tests for the DARU vLLM server argv (PR5): command building only.
 
-Nenhum processo é lançado e nenhuma porta é aberta — `build_server_command`
-é pura. O ciclo de vida (spawn/health/stop) roda só no Colab.
+No process is spawned and no port is opened — `build_server_command` is
+pure. The lifecycle (spawn/health/stop) runs only in Colab.
 """
 
 import sys

@@ -1,8 +1,9 @@
-"""Testes do System 1 DARU: contrato /v1/systemone restaurado do 79a8654.
+"""Tests for the DARU System 1: /v1/systemone contract restored from 79a8654.
 
-O vLLM real nunca é chamado — httpx.MockTransport captura a request e serve
-respostas enlatadas imitando o Structured Decisions API (probabilidades prontas
-por apelido; sem max_tokens/logprobs na request, que o endpoint rejeita).
+The real vLLM is never called — httpx.MockTransport captures the request
+and serves canned responses mimicking the Structured Decisions API (ready
+per-alias probabilities; no max_tokens/logprobs in the request, which the
+endpoint rejects).
 """
 
 import json

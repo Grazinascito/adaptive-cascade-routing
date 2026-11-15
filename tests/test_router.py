@@ -1,4 +1,4 @@
-"""Router puro (PR3): softmax, entropia, P_top e a regra R_α (RouteLLM)."""
+"""Pure router (PR3): softmax, entropy, P_top and RouteLLM's R_α rule."""
 
 import math
 

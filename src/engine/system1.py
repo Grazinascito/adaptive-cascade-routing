@@ -1,12 +1,13 @@
-"""System1Engine — decisão tipada de 1 token no endpoint /v1/systemone do vLLM.
+"""System1Engine — typed 1-token decision on the vLLM /v1/systemone endpoint.
 
-Restaurado do commit 79a8654 (Structured Decisions API do vLLM >= 0.32.0) e
-adaptado ao DARU: as categorias de comida/bebida entram como parâmetro, cada
-uma vira uma opção com apelido de 1 letra (A–L) na pergunta `choice`, e a
-resposta já traz a probabilidade por apelido (softmax do servidor). O cliente
-renormaliza (softmax sobre os log-probs, com piso para opções de probabilidade
-zero) antes de calcular P_top e entropia. A request NÃO leva `max_tokens` nem
-`logprobs` — o endpoint rejeita ambos com HTTP 400.
+Restored from commit 79a8654 (vLLM >= 0.32.0 Structured Decisions API) and
+adapted to DARU: the food/beverage categories arrive as a parameter, each
+becomes an option with a 1-letter alias (A–L) in the `choice` question, and
+the response already carries the per-alias probability (server softmax).
+The client renormalizes (softmax over the log-probs, with a floor for
+zero-probability options) before computing P_top and entropy. The request
+carries NO `max_tokens` and no `logprobs` — the endpoint rejects both with
+HTTP 400.
 """
 
 import math
@@ -46,9 +47,9 @@ class System1Output:
 
 
 def assign_aliases(allowed_categories: Sequence[str]) -> dict[str, str]:
-    """Mapeia apelido (A–L, por posição) -> nome original da categoria.
+    """Maps alias (A–L, by position) -> original category name.
 
-    Compara em minúsculas para detectar duplicatas; valida antes de qualquer HTTP.
+    Compares lowercase to detect duplicates; validates before any HTTP.
     """
     categories = list(allowed_categories)
     if not categories:
@@ -73,10 +74,11 @@ def _renormalized_probabilities(
     raw: Mapping[str, float],
     aliases: Sequence[str],
 ) -> dict[str, float]:
-    """Softmax sobre ln(P) dos apelidos; P ausente ou zero recebe LOGPROB_FLOOR.
+    """Softmax over ln(P) of the aliases; missing or zero P gets LOGPROB_FLOOR.
 
-    Renormaliza saídas do servidor que não somem 1: exp(ln(P)) = P e o softmax
-    divide pelo total. A subtração do máximo evita overflow no exp.
+    Renormalizes server outputs that do not sum to 1: exp(ln(P)) = P and
+    the softmax divides by the total. Subtracting the max avoids overflow
+    in exp.
     """
     if not any(raw.get(alias, 0.0) > 0.0 for alias in aliases):
         raise ValueError(f"no positive probability for any of the aliases {list(aliases)}")
@@ -124,11 +126,12 @@ def evaluate_typed_decision(
     timeout_s: float = DEFAULT_TIMEOUT_S,
     client: httpx.Client | None = None,
 ) -> System1Output:
-    """Executa a decisão de 1 token e devolve P_top/entropia já renormalizadas.
+    """Runs the 1-token decision; returns P_top/entropy already renormalized.
 
-    `instructions` (prefixo fixo, igual em toda query para o prefix caching do
-    vLLM) vai no campo homônimo; o texto variável do item vai no `state`.
-    Erros de status do httpx propagam — o fallback gracioso é papel do harness.
+    `instructions` (fixed prefix, identical in every query for vLLM prefix
+    caching) goes in the field of the same name; the variable item text
+    goes in `state`. httpx status errors propagate — graceful fallback is
+    the harness's job.
     """
     if not item_text.strip():
         raise ValueError(f"item_text must be non-blank, got {item_text!r}")

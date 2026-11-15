@@ -1,9 +1,10 @@
-"""vLLMServerManager — ciclo de vida do servidor vLLM para o benchmark DARU.
+"""vLLMServerManager — vLLM server lifecycle for the DARU benchmark.
 
-Sobe `Qwen/Qwen3-4B-AWQ` (AWQ 4-bit) como subprocesso com prefix caching e
-90% da VRAM, prontinho para os endpoints /v1/systemone e /v1/chat/completions.
-O módulo nunca importa vllm: CI/macOS não têm CUDA — o servidor é lançado como
-subprocesso (ADR-0001) e o health check é GET /v1/models até responder 200.
+Starts `Qwen/Qwen3-4B-AWQ` (4-bit AWQ) as a subprocess with prefix caching
+and 90% of VRAM, ready for the /v1/systemone and /v1/chat/completions
+endpoints. The module never imports vllm: CI/macOS have no CUDA — the
+server runs as a subprocess (ADR-0001) and the health check is
+GET /v1/models until it answers 200.
 """
 
 import logging
@@ -28,7 +29,7 @@ _process: "subprocess.Popen[bytes] | None" = None
 
 
 class vLLMServerException(Exception):
-    """Falha ao subir ou manter o servidor vLLM (crash, OOM ou timeout de startup)."""
+    """Failed to start or keep the vLLM server up (crash, OOM or startup timeout)."""
 
 
 def build_server_command(
@@ -40,7 +41,7 @@ def build_server_command(
     gpu_memory_utilization: float = DEFAULT_GPU_MEMORY_UTILIZATION,
     enable_prefix_caching: bool = True,
 ) -> list[str]:
-    """Argv de lançamento do vLLM: modelo, porta, 90% da VRAM e prefix caching."""
+    """vLLM launch argv: model, port, 90% of VRAM and prefix caching."""
     command = [
         sys.executable,
         "-m",
@@ -61,7 +62,7 @@ def build_server_command(
 
 
 def _read_vram_usage_raw() -> str | None:
-    """Lê o stdout bruto do nvidia-smi (valores em MiB); None se indisponível."""
+    """Reads raw nvidia-smi stdout (values in MiB); None if unavailable."""
     try:
         result = subprocess.run(
             [
@@ -82,7 +83,7 @@ def _read_vram_usage_raw() -> str | None:
 def health_check(
     base_url: str = "http://127.0.0.1:8000", *, timeout_s: float = MODELS_TIMEOUT_S
 ) -> bool:
-    """True quando GET /v1/models responde 200; qualquer erro vira False."""
+    """True when GET /v1/models answers 200; any error becomes False."""
     try:
         response = httpx.get(f"{base_url.rstrip('/')}/v1/models", timeout=timeout_s)
     except httpx.HTTPError:
@@ -93,11 +94,11 @@ def health_check(
 def _server_has_model(
     base_url: str, model_name: str, *, timeout_s: float = MODELS_TIMEOUT_S
 ) -> bool | None:
-    """Confere via /v1/models se o servidor serve `model_name`.
+    """Checks via /v1/models whether the server serves `model_name`.
 
-    Devolve True/False conforme a lista de modelos carregados; None quando
-    a lista não pôde ser obtida (erro de conexão ou status != 200) — caso
-    em que o reuso segue com warning em vez de falhar.
+    Returns True/False from the loaded model list; None when the list could
+    not be fetched (connection error or status != 200) — in that case reuse
+    continues with a warning instead of failing.
     """
     try:
         response = httpx.get(f"{base_url.rstrip('/')}/v1/models", timeout=timeout_s)
@@ -110,7 +111,7 @@ def _server_has_model(
 
 
 def _startup_failure_context(command: list[str]) -> str:
-    """Cauda comum das mensagens de falha de startup: log, VRAM e restart."""
+    """Common tail for startup failure messages: log, VRAM and restart."""
     vram = _read_vram_usage_raw()
     return (
         f"See '{VLLM_LOG_PATH}' and GPU VRAM (MiB used,total): "
@@ -129,13 +130,14 @@ def start_server(
     gpu_memory_utilization: float = DEFAULT_GPU_MEMORY_UTILIZATION,
     startup_timeout_s: float = DEFAULT_STARTUP_TIMEOUT_S,
 ) -> bool:
-    """Sobe o servidor vLLM e espera /v1/models responder 200.
+    """Starts the vLLM server and waits for /v1/models to answer 200.
 
-    Reusa um servidor já saudável — conferindo via /v1/models que ele serve
-    `model`; sem a lista, reusa com warning. Se o processo morrer durante o
-    startup ou o health nunca passar dentro de `startup_timeout_s`, registra
-    o evento no log e levanta `vLLMServerException` com instruções de restart
-    e a leitura de VRAM (edge case de crash/OOM da spec).
+    Reuses an already healthy server — checking via /v1/models that it
+    serves `model`; without the list, reuses with a warning. If the process
+    dies during startup or health never passes within `startup_timeout_s`,
+    logs the event and raises `vLLMServerException` with restart
+    instructions and the VRAM reading (the crash/OOM edge case from the
+    spec).
     """
     global _process
     command = build_server_command(
@@ -188,7 +190,7 @@ def start_server(
 
 
 def stop_server() -> None:
-    """Termina o processo que este módulo spawnou; no-op caso contrário."""
+    """Terminates the process this module spawned; no-op otherwise."""
     global _process
     if _process is None:
         return

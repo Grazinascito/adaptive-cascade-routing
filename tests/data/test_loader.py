@@ -1,9 +1,9 @@
-"""Testes do loader DARU: parser, filtro fechado, dedup e amostragem estratificada.
+"""Tests for the DARU loader: parser, closed-set filter, dedup and stratified sampling.
 
-Sem rede: os dados vêm de tests/fixtures/daru_sample.json (40 linhas REAIS
-amostradas do xlsx em cache com random.Random(42)); os xlsx temporários são
-construídos com openpyxl a partir dessas linhas, re-embolindo os 5 campos em
-1 célula no formato do arquivo original.
+No network: data comes from tests/fixtures/daru_sample.json (40 REAL rows
+sampled from the cached xlsx with random.Random(42)); the temporary xlsx
+files are built with openpyxl from those rows, re-squashing the 5 fields
+into 1 cell in the original file's format.
 """
 
 import csv
@@ -25,7 +25,7 @@ def fixture_rows() -> list[tuple[str, str]]:
 
 
 def squish(description: str, categoria: str, *, prefix: str = "6-") -> str:
-    """Recompõe uma célula embolida de 5 campos no formato real do DARU."""
+    """Rebuilds a squashed 5-field cell in DARU's real format."""
     buffer = io.StringIO()
     csv.writer(buffer, delimiter=";", quotechar='"', lineterminator="").writerow(
         [description, "1-BENS DE CONSUMO", f"{prefix}{categoria}", "9-SUBCATEGORIA", "PRODUTO"]

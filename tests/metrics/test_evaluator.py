@@ -11,6 +11,7 @@ Corresponde à Story 6 de docs/dataset-pivot-ncm-spec.md.
 import json
 import logging
 import math
+from typing import Any
 
 import httpx
 import matplotlib
@@ -64,7 +65,7 @@ def _samples() -> list[NCMEvalSample]:
 
 
 def _stub_client(
-    requests: list[dict[str, object]],
+    requests: list[dict[str, Any]],
     *,
     s1_confidence: float = 0.9,
     s1_code_for: dict[str, str] | None = None,
@@ -144,8 +145,8 @@ def _run_harness(
     s1_code_for: dict[str, str] | None = None,
     chat_status_after: int | None = None,
     label_digits: int = 8,
-) -> tuple[BenchmarkRun, list[dict[str, object]]]:
-    requests: list[dict[str, object]] = []
+) -> tuple[BenchmarkRun, list[dict[str, Any]]]:
+    requests: list[dict[str, Any]] = []
     harness = BenchmarkHarness(
         _samples(),
         label_digits=label_digits,
@@ -162,11 +163,11 @@ def _run_harness(
         harness.close()
 
 
-def _s1_calls(requests: list[dict[str, object]]) -> list[dict[str, object]]:
+def _s1_calls(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [r for r in requests if r["body"]["messages"][0]["role"] == "system"]
 
 
-def _s2_calls(requests: list[dict[str, object]]) -> list[dict[str, object]]:
+def _s2_calls(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [r for r in requests if r["body"]["messages"][0]["role"] != "system"]
 
 
@@ -463,7 +464,7 @@ def test_main_runs_benchmark_from_config_against_stub_server(
             item_id += 1
     monkeypatch.setattr(evaluator, "load_ncm_pool", lambda _name: (pool, len(pool)))
     monkeypatch.setattr(evaluator, "health_check", lambda _url: True)
-    requests: list[dict[str, object]] = []
+    requests: list[dict[str, Any]] = []
     results_dir = tmp_path / "results"
 
     exit_code = main(

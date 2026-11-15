@@ -69,6 +69,8 @@ Fatos verificados hoje no arquivo real (`DATASETPRODUTOSVAREJOBRASIL.xlsx`):
 - Tokens de saída (decode) somados por cenário.
 - APGR = (acurácia_cascata − acurácia_S1) / (acurácia_S2 − acurácia_S1).
 - Tudo salvo por item em `results/raw_benchmark_data.json` (item, rótulo real, é-cauda, predição do S1, P_top, entropia, latências, roteado?, predição do S2, tokens, acerto).
+- Saída inválida do System 2 (JSON quebrado, ou categoria fora da lista mesmo após casamento aproximado determinístico com corte 0,85 — ex.: `SUCCOS E REFRESCOS` → `SUCOS E REFRESCOS`) vira **erro contado do item** (`s2_parse_ok`, `s2_category_fuzzy` no registro e no sumário), nunca uma exceção que derruba o run.
+- Checkpoints parciais por fase em `results/partial_*.json`: se o run cair no meio, o trabalho de GPU já feito fica salvo em disco.
 
 ## 6. Pilot antes do run completo
 

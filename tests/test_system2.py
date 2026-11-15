@@ -2,13 +2,13 @@
 
 Responses come from httpx.MockTransport mimicking vLLM. Covers the happy
 path, markdown fences, prose around the JSON, category validation against
-the list (with case/accent normalization), usage tokens and latency.
+the list (case/accent normalization plus a close-match fallback), counted
+parse failures, usage tokens and latency.
 """
 
 import json
 
 import httpx
-import pytest
 
 from src.engine.system2 import SYSTEM2_SYSTEM_PROMPT, System2Engine, System2Output
 
@@ -151,12 +151,15 @@ def test_json_with_trailing_prose_is_parsed() -> None:
     assert output.reasoning == _VALID_PAYLOAD["reasoning"]
 
 
-def test_category_outside_allowed_list_is_rejected() -> None:
-    payload = dict(_VALID_PAYLOAD, category="ELETRÔNICOS")
+def test_category_far_outside_list_is_a_counted_failure_not_a_crash() -> None:
+    payload = dict(_VALID_PAYLOAD, category="LIVROS")
     engine = _engine_returning(json.dumps(payload, ensure_ascii=False), [])
 
-    with pytest.raises(ValueError, match="not in the allowed list"):
-        engine.reason(_ITEM, _CATEGORIES)
+    output = engine.reason(_ITEM, _CATEGORIES)
+
+    assert output.parse_ok is False
+    assert output.predicted_category == ""
+    assert output.revisor_insight == ""
 
 
 def test_category_match_normalizes_case_and_accents_to_canonical_spelling() -> None:
@@ -179,8 +182,23 @@ def test_missing_optional_fields_default_to_empty_strings() -> None:
     assert output.revisor_insight == ""
 
 
-def test_non_json_content_raises() -> None:
+def test_non_json_content_is_a_counted_failure_not_a_crash() -> None:
     engine = _engine_returning("MERCEARIA looks right.", [])
 
-    with pytest.raises(ValueError, match="not a parsable JSON object"):
-        engine.reason(_ITEM, _CATEGORIES)
+    output = engine.reason(_ITEM, _CATEGORIES)
+
+    assert output.parse_ok is False
+    assert output.predicted_category == ""
+
+
+def test_misspelled_category_is_fuzzy_matched_to_canonical() -> None:
+    # Real failure mode from the first Colab run: the model wrote
+    # "SUCCOS E REFRESCOS" for "SUCOS E REFRESCOS" and crashed the run.
+    payload = dict(_VALID_PAYLOAD, category="FRIOZ E LATICINIOZ")
+    engine = _engine_returning(json.dumps(payload, ensure_ascii=False), [])
+
+    output = engine.reason(_ITEM, _CATEGORIES)
+
+    assert output.predicted_category == "FRIOS E LATICINIOS"
+    assert output.category_fuzzy_matched is True
+    assert output.parse_ok is True

@@ -161,6 +161,8 @@ def _s2_only_record(sample: CatalogSample, output: System2Output) -> BenchmarkRe
         s2_revisor_insight=output.revisor_insight,
         s2_decode_tokens=output.decode_tokens,
         s2_latency_ms=output.latency_ms,
+        s2_parse_ok=output.parse_ok,
+        s2_category_fuzzy=output.category_fuzzy_matched,
         final_prediction=output.predicted_category,
         is_correct=output.predicted_category == sample.canonical_category,
     )
@@ -511,6 +513,14 @@ def write_results(payload: Mapping[str, Any], path: str | Path) -> Path:
     return output
 
 
+def _checkpoint(name: str, records: Sequence[BenchmarkRecord]) -> None:
+    """Partial per-scenario dump so a late crash keeps finished GPU work."""
+    write_results(
+        {"scenario": name, "records": [asdict(record) for record in records]},
+        RESULTS_PATH.parent / f"partial_{name}.json",
+    )
+
+
 def assemble_payload(
     *,
     config: Mapping[str, Any],
@@ -592,14 +602,18 @@ def execute_full_benchmark(
     harness = BenchmarkHarness(settings)
     try:
         validation_records = harness.run_validation_phase(sets.validation)
+        _checkpoint("validation", validation_records)
         sweep = alpha_sweep(validation_records)
         if alpha_override is not None:
             alpha_used, alpha_source = float(alpha_override), "override"
         else:
             alpha_used, alpha_source = sweep["best_alpha"], "validation_sweep"
         records_a = harness.run_system1_scenario(sets.test)
+        _checkpoint("sc_a", records_a)
         records_b = harness.run_system2_scenario(sets.test)
+        _checkpoint("sc_b", records_b)
         records_c = harness.run_cascade_scenario(sets.test, alpha=alpha_used)
+        _checkpoint("sc_c", records_c)
     finally:
         harness.close()
     payload = assemble_payload(
@@ -616,4 +630,6 @@ def execute_full_benchmark(
         records_c=records_c,
     )
     write_results(payload, results_path)
+    for partial in Path(results_path).parent.glob("partial_*.json"):
+        partial.unlink()
     return payload

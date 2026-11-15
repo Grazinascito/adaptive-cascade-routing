@@ -8,6 +8,7 @@ tolerates markdown fences and prose around the JSON (lesson from commit
 fallback.
 """
 
+import difflib
 import json
 import re
 import time
@@ -41,6 +42,10 @@ SYSTEM2_SYSTEM_PROMPT: Final = (
 # the repo history (commit 556000a); stripped before parsing.
 _FENCE_PATTERN: Final = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
+# Close-match cutoff for model misspellings of a category name
+# (real case from the first Colab run: "SUCCOS E REFRESCOS").
+_FUZZY_CUTOFF: Final = 0.85
+
 
 @dataclass(frozen=True, slots=True)
 class System2Output:
@@ -49,6 +54,8 @@ class System2Output:
     revisor_insight: str
     decode_tokens: int
     latency_ms: float
+    category_fuzzy_matched: bool = False
+    parse_ok: bool = True
 
 
 def _category_key(category: str) -> str:
@@ -57,14 +64,23 @@ def _category_key(category: str) -> str:
     return " ".join(without_accents.casefold().split())
 
 
-def _match_category(raw_category: object, allowed_categories: Sequence[str]) -> str:
-    """Returns the canonical spelling of the category; `ValueError` if outside the list."""
+def _match_category(raw_category: object, allowed_categories: Sequence[str]) -> tuple[str, bool]:
+    """Exact accent/case-insensitive match, then a deterministic close match.
+
+    Qwen3-4B occasionally misspells a category ("SUCCOS E REFRESCOS" for
+    "SUCOS E REFRESCOS"); difflib at 0.85 turns that into a counted
+    prediction instead of a crash. Raises ValueError when nothing matches.
+    """
     if not isinstance(raw_category, str):
         raise ValueError(f"system 2 'category' must be a string, got {raw_category!r}")
     raw_key = _category_key(raw_category)
-    for allowed in allowed_categories:
-        if _category_key(allowed) == raw_key:
-            return allowed
+    allowed_keys = [_category_key(allowed) for allowed in allowed_categories]
+    for allowed, key in zip(allowed_categories, allowed_keys, strict=True):
+        if key == raw_key:
+            return allowed, False
+    close = difflib.get_close_matches(raw_key, allowed_keys, n=1, cutoff=_FUZZY_CUTOFF)
+    if close:
+        return allowed_categories[allowed_keys.index(close[0])], True
     raise ValueError(
         f"system 2 category {raw_category!r} is not in the allowed list {list(allowed_categories)}"
     )
@@ -85,8 +101,8 @@ def _braces_span(text: str) -> str | None:
 
 def _parse_system2_response(
     content: object, allowed_categories: Sequence[str]
-) -> tuple[str, str, str]:
-    """Extracts (reasoning, category, revisor_insight) from the model content.
+) -> tuple[str, str, str, bool]:
+    """Extracts (reasoning, category, revisor_insight, fuzzy) from content.
 
     Tries `json.loads` on the text (with and without the markdown fence)
     and, when prose surrounds the object, on the span from the first `{`
@@ -109,11 +125,12 @@ def _parse_system2_response(
 
     reasoning = parsed.get("reasoning")
     revisor_insight = parsed.get("revisor_insight")
-    category = _match_category(parsed.get("category"), allowed_categories)
+    category, fuzzy = _match_category(parsed.get("category"), allowed_categories)
     return (
         reasoning if isinstance(reasoning, str) else "",
         category,
         revisor_insight if isinstance(revisor_insight, str) else "",
+        fuzzy,
     )
 
 
@@ -191,14 +208,28 @@ class System2Engine:
         data = response.json()
         choices = data.get("choices") or [{}]
         message = choices[0].get("message") or {}
-        reasoning, category, revisor_insight = _parse_system2_response(
-            message.get("content"), allowed_categories
-        )
         usage = data.get("usage") or {}
+        decode_tokens = int(usage.get("completion_tokens") or 0)
+        try:
+            reasoning, category, revisor_insight, fuzzy = _parse_system2_response(
+                message.get("content"), allowed_categories
+            )
+        except ValueError:
+            # Non-JSON text or a category outside the list: a measured failure
+            # of one item, not a reason to kill the whole GPU run.
+            return System2Output(
+                reasoning="",
+                predicted_category="",
+                revisor_insight="",
+                decode_tokens=decode_tokens,
+                latency_ms=latency_ms,
+                parse_ok=False,
+            )
         return System2Output(
             reasoning=reasoning,
             predicted_category=category,
             revisor_insight=revisor_insight,
-            decode_tokens=int(usage.get("completion_tokens") or 0),
+            decode_tokens=decode_tokens,
             latency_ms=latency_ms,
+            category_fuzzy_matched=fuzzy,
         )

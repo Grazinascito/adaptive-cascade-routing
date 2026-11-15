@@ -28,6 +28,8 @@ class ScenarioSummary:
     decode_tokens_total: int
     s1_latency_percentiles_ms: dict[str, float]
     s2_latency_percentiles_ms: dict[str, float] | None = None
+    s2_parse_failures: int = 0
+    s2_fuzzy_category_matches: int = 0
 
 
 def summarize(records: Sequence[BenchmarkRecord]) -> ScenarioSummary:
@@ -45,4 +47,6 @@ def summarize(records: Sequence[BenchmarkRecord]) -> ScenarioSummary:
         decode_tokens_total=total_decode_tokens(records),
         s1_latency_percentiles_ms=latency_percentiles([record.s1_latency_ms for record in records]),
         s2_latency_percentiles_ms=(latency_percentiles(s2_latencies) if s2_latencies else None),
+        s2_parse_failures=sum(1 for record in records if not record.s2_parse_ok),
+        s2_fuzzy_category_matches=sum(1 for record in records if record.s2_category_fuzzy),
     )

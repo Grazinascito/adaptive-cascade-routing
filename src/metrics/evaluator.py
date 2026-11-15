@@ -30,6 +30,8 @@ class BenchmarkRecord:
     s2_latency_ms: float | None
     final_prediction: str
     is_correct: bool
+    s2_parse_ok: bool = True
+    s2_category_fuzzy: bool = False
 
 
 def accuracy(records: Sequence[BenchmarkRecord]) -> float:

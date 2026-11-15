@@ -190,3 +190,42 @@ def test_summarize_without_routed_items_has_no_s2_percentiles(
 def test_summarize_on_empty_records_raises() -> None:
     with pytest.raises(ValueError, match="must not be empty"):
         summarize([])
+
+
+def test_summarize_counts_parse_failures_and_fuzzy_matches() -> None:
+    from src.metrics.evaluator import BenchmarkRecord
+    from src.metrics.summary import summarize
+
+    def record(**overrides: object) -> BenchmarkRecord:
+        base: dict[str, object] = dict(
+            item_id="1",
+            raw_text="X",
+            canonical_category="MERCEARIA",
+            is_long_tail=False,
+            s1_prediction="MERCEARIA",
+            s1_p_top=0.9,
+            s1_entropy=0.5,
+            s1_latency_ms=1.0,
+            routed_to_s2=False,
+            s2_prediction="",
+            s2_reasoning="",
+            s2_revisor_insight="",
+            s2_decode_tokens=0,
+            s2_latency_ms=None,
+            final_prediction="MERCEARIA",
+            is_correct=True,
+            s2_parse_ok=True,
+            s2_category_fuzzy=False,
+        )
+        base.update(overrides)
+        return BenchmarkRecord(**base)  # type: ignore[arg-type]
+
+    summary = summarize(
+        [
+            record(),
+            record(s2_parse_ok=False),
+            record(s2_category_fuzzy=True),
+        ]
+    )
+    assert summary.s2_parse_failures == 1
+    assert summary.s2_fuzzy_category_matches == 1

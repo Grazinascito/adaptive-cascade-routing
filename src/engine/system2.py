@@ -1,163 +1,202 @@
-"""System2Engine — invoca /v1/chat/completions com Chain-of-Thought e saída JSON estrita.
+"""System2Engine — slow-path da cascata DARU: CoT + JSON estrito via /v1/chat/completions.
 
-É o fallback da cascata (slow-path). Após o pivot NCM (2026-11-14), a tarefa é
-classificar o nome de um item de catálogo em código NCM de 8 dígitos; o prompt
-carrega a lista compacta de capítulos como contexto da taxonomia (o "mapa da
-árvore" do blog do iFood). Componente F.
+Recebe o texto do item, a lista fechada de categorias do benchmark e a
+sugestão opcional do System 1; devolve categoria validada contra a lista
+(normalização de caixa/acentos), o raciocínio e o revisor_insight. O parse
+tolera cerca de markdown e prosa ao redor do JSON (lição do commit 556000a);
+categoria fora da lista levanta `ValueError` — sem fallback silencioso.
 """
 
 import json
-import logging
 import re
-from typing import Final, TypedDict
+import time
+import unicodedata
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Final
 
 import httpx
 
-from src.data.loader import chapter_lines
-from src.engine.serving import DEFAULT_BASE_URL, DEFAULT_MODEL, post_json
+DEFAULT_MODEL: Final = "Qwen/Qwen3-4B-AWQ"
+DEFAULT_BASE_URL: Final = "http://127.0.0.1:8000/v1"
 
-logger = logging.getLogger(__name__)
-
-SYSTEM2_PROMPT_TEMPLATE: Final = (
-    "Você é um especialista em classificação fiscal de mercadorias (NCM — "
-    "Nomenclatura Comum do Mercosul).\n"
-    "Analise o nome do item de catálogo abaixo e forneça o raciocínio passo a "
-    "passo (Chain-of-Thought) antes de determinar o código NCM de 8 dígitos.\n\n"
-    "Capítulos disponíveis neste catálogo:\n"
-    + "\n".join(chapter_lines())
-    + "\n\nItem: {item_name}\n\n"
-    "Retorne um JSON estrito no seguinte formato:\n"
+SYSTEM2_SYSTEM_PROMPT: Final = (
+    "Você é um especialista em classificação de produtos do varejo brasileiro.\n"
+    "Sua tarefa: classificar a descrição de um produto de varejo brasileiro em "
+    "exatamente UMA das categorias fornecidas na mensagem do usuário.\n"
+    "Pense passo a passo: a descrição vem abreviada, em estilo de nota fiscal; "
+    "elimine as categorias incompatíveis e escolha a única correta.\n"
+    "Responda SOMENTE com um objeto JSON estrito — sem blocos de código markdown, "
+    "sem texto antes ou depois — no formato:\n"
     "{\n"
-    '  "reasoning": "Explicação detalhada...",\n'
-    '  "ncm_code": "12345678"\n'
-    "}\n\n"
-    "Responda apenas com o JSON, sem blocos de código markdown, e mantenha "
-    "o raciocínio em até duas frases."
+    '  "reasoning": "raciocínio passo a passo, em até duas frases",\n'
+    '  "category": "a categoria escolhida, copiada exatamente da lista fornecida",\n'
+    '  "revisor_insight": "uma frase com a regra geral que explica o acerto"\n'
+    "}\n"
+    "Não invente categorias fora da lista fornecida."
 )
 
-_NCM_CODE_PATTERN: Final = re.compile(r"\b(\d{8})\b")
-
-# Cerca de markdown (```json ... ```) observada envolvendo o JSON em 12 das
-# 20 respostas do Qwen3-4B-AWQ no Colab (temperatura 0) na era ASSIN; o
-# json.loads rejeita o texto com cerca, então ela é removida antes do parse.
-_FENCE_PATTERN: Final = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
-
-DEFAULT_INVALID_CODE: Final = "00000000"
+# Cerca de markdown (```json ... ```) observada envolvendo o JSON do
+# Qwen3-4B-AWQ no histórico do repo (commit 556000a); removida antes do parse.
+_FENCE_PATTERN: Final = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
-class System2Output(TypedDict):
-    """Saída do slow-path NCM.
-
-    `ncm_code` é `DEFAULT_INVALID_CODE` quando nem o JSON nem o regex
-    encontram um código de 8 dígitos (contado como erro na avaliação, nunca
-    derruba o run). `reasoning` carrega o CoT do JSON quando
-    `fallback_used=False` e o conteúdo bruto do modelo quando `True`.
-    """
-
+@dataclass(frozen=True, slots=True)
+class System2Output:
     reasoning: str
-
-    ncm_code: str
-
-    prompt_tokens: int
-
-    completion_tokens: int
-
+    predicted_category: str
+    revisor_insight: str
+    decode_tokens: int
     latency_ms: float
 
-    fallback_used: bool
+
+def _category_key(category: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", category)
+    without_accents = "".join(char for char in decomposed if not unicodedata.combining(char))
+    return " ".join(without_accents.casefold().split())
 
 
-def _render_prompt(item_name: str) -> str:
-    return SYSTEM2_PROMPT_TEMPLATE.replace("{item_name}", item_name)
+def _match_category(raw_category: object, allowed_categories: Sequence[str]) -> str:
+    """Devolve a grafia canônica da categoria; `ValueError` se fora da lista."""
+    if not isinstance(raw_category, str):
+        raise ValueError(f"system 2 'category' must be a string, got {raw_category!r}")
+    raw_key = _category_key(raw_category)
+    for allowed in allowed_categories:
+        if _category_key(allowed) == raw_key:
+            return allowed
+    raise ValueError(
+        f"system 2 category {raw_category!r} is not in the allowed list "
+        f"{list(allowed_categories)}"
+    )
 
 
 def _strip_markdown_fence(content: str) -> str:
-    """Remove a cerca de markdown; sem cerca, devolve o texto inalterado."""
     match = _FENCE_PATTERN.match(content)
     return match.group(1) if match else content
 
 
-def _parse_system2_response(content: str) -> tuple[str, str, bool]:
-    """Parseia a saída CoT+JSON com fallbacks em cadeia: JSON → regex → default.
+def _braces_span(text: str) -> str | None:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    return text[start : end + 1]
 
-    Retorna (reasoning, ncm_code, fallback_used). JSON válido — com ou sem
-    cerca de markdown, que é formatação e não conteúdo — com `reasoning`
-    (str) e `ncm_code` de 8 dígitos retorna `fallback_used=False`; qualquer
-    falha cai no regex sobre o texto bruto e, sem match, no default
-    `DEFAULT_INVALID_CODE` com warning (edge case de output vazio/truncado).
-    A validade do código na taxonomia é papel da avaliação, não do parser.
+
+def _parse_system2_response(
+    content: object, allowed_categories: Sequence[str]
+) -> tuple[str, str, str]:
+    """Extrai (reasoning, category, revisor_insight) do conteúdo do modelo.
+
+    Tenta `json.loads` no texto (com e sem cerca de markdown) e, se a prosa
+    cercar o objeto, no trecho entre a primeira `{` e a última `}`.
     """
-    try:
-        parsed = json.loads(_strip_markdown_fence(content))
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, dict):
-        reasoning = parsed.get("reasoning")
-        raw_code = parsed.get("ncm_code")
-        if isinstance(reasoning, str) and isinstance(raw_code, str):
-            match = _NCM_CODE_PATTERN.search(raw_code)
-            if match:
-                return reasoning, match.group(1), False
+    text = content if isinstance(content, str) else ""
+    candidates = [_strip_markdown_fence(text), _braces_span(text)]
+    parsed: object = None
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            break
+    if not isinstance(parsed, dict):
+        raise ValueError(f"system 2 output is not a parsable JSON object: {text[:200]!r}")
 
-    match = _NCM_CODE_PATTERN.search(content)
-    if match:
-        logger.warning(
-            "system 2 output is not valid json; extracted code '%s' via regex fallback",
-            match.group(1),
+    reasoning = parsed.get("reasoning")
+    revisor_insight = parsed.get("revisor_insight")
+    category = _match_category(parsed.get("category"), allowed_categories)
+    return (
+        reasoning if isinstance(reasoning, str) else "",
+        category,
+        revisor_insight if isinstance(revisor_insight, str) else "",
+    )
+
+
+def _render_user_content(
+    item_text: str,
+    allowed_categories: Sequence[str],
+    s1_suggested: str | None,
+) -> str:
+    lines = [
+        f"Item: {item_text}",
+        "",
+        "Categorias permitidas:",
+        *(f"- {category}" for category in allowed_categories),
+    ]
+    if s1_suggested is not None:
+        lines += [
+            "",
+            f"Sugestão do System 1 (palpite rápido; confirme ou corrija): {s1_suggested}",
+        ]
+    return "\n".join(lines)
+
+
+class System2Engine:
+    """Cliente do slow-path: CoT + JSON estrito, temperatura 0, thinking off."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str = DEFAULT_BASE_URL,
+        model: str = DEFAULT_MODEL,
+        max_tokens: int = 256,
+        temperature: float = 0.0,
+        timeout_s: float = 120.0,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        self._max_tokens = max_tokens
+        self._temperature = temperature
+        self._owns_client = client is None
+        self._client = client if client is not None else httpx.Client(timeout=timeout_s)
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+    def reason(
+        self,
+        item_text: str,
+        allowed_categories: Sequence[str],
+        s1_suggested: str | None = None,
+    ) -> System2Output:
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": SYSTEM2_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": _render_user_content(item_text, allowed_categories, s1_suggested),
+                },
+            ],
+            "max_tokens": self._max_tokens,
+            "temperature": self._temperature,
+            # Qwen3 "original" pensa por padrão no template de chat; sem isso o
+            # conteúdo vem precedido de blocos <think> e quebra o parse do JSON.
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+
+        started = time.perf_counter()
+        response = self._client.post(f"{self._base_url}/chat/completions", json=payload)
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        response.raise_for_status()
+
+        data = response.json()
+        choices = data.get("choices") or [{}]
+        message = choices[0].get("message") or {}
+        reasoning, category, revisor_insight = _parse_system2_response(
+            message.get("content"), allowed_categories
         )
-        return content, match.group(1), True
-
-    logger.warning(
-        "system 2 output is empty or has no parsable code; defaulting to '%s'",
-        DEFAULT_INVALID_CODE,
-    )
-    return content, DEFAULT_INVALID_CODE, True
-
-
-def execute_reasoning(
-    item_name: str,
-    *,
-    model: str = DEFAULT_MODEL,
-    base_url: str = DEFAULT_BASE_URL,
-    max_tokens: int = 256,
-    temperature: float = 0.0,
-    timeout_s: float = 120.0,
-    client: httpx.Client | None = None,
-) -> System2Output:
-    """Executa o slow-path CoT+JSON (FR-001/FR-002 da spec F–G) e retorna System2Output.
-
-    A geração é limitada a `max_tokens` com `temperature=0.0`
-    (reprodutibilidade do benchmark). Saída não conforme cai na cadeia de
-    fallbacks com `fallback_used=True` e warning; erros de status/timeout/
-    conexão do httpx propagam — o fallback para a previsão do System 1 é
-    responsabilidade do harness (Componente G).
-    """
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": _render_prompt(item_name)}],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        # Qwen3 "original" pensa por padrão no template de chat; sem isso o
-        # conteúdo vem precedido de blocos <think> e quebra o parse do JSON.
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-
-    response, latency_ms = post_json(client, f"{base_url}/chat/completions", payload, timeout_s)
-
-    data = response.json()
-    choices = data.get("choices") or [{}]
-    message = choices[0].get("message") or {}
-    content = message.get("content")
-    reasoning, ncm_code, fallback_used = _parse_system2_response(
-        content if isinstance(content, str) else ""
-    )
-
-    usage = data.get("usage") or {}
-    return System2Output(
-        reasoning=reasoning,
-        ncm_code=ncm_code,
-        prompt_tokens=int(usage.get("prompt_tokens") or 0),
-        completion_tokens=int(usage.get("completion_tokens") or 0),
-        latency_ms=latency_ms,
-        fallback_used=fallback_used,
-    )
+        usage = data.get("usage") or {}
+        return System2Output(
+            reasoning=reasoning,
+            predicted_category=category,
+            revisor_insight=revisor_insight,
+            decode_tokens=int(usage.get("completion_tokens") or 0),
+            latency_ms=latency_ms,
+        )

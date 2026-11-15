@@ -1,287 +1,208 @@
-"""DatasetLoader NCM — parseia o dataset NCM-RAFT-samall e amostra o conjunto congelado.
+"""DARU loader — parses DATASETPRODUTOSVAREJOBRASIL.xlsx and samples the frozen sets.
 
-Pivot de dataset (2026-11-14): o ASSIN 2 saiu da linha principal porque a tese
-do projeto (ganhos da cascata híbrida no eixo System 1 × System 2) exige cauda
-ambígua de catálogo, o tipo de conteúdo do blog do iFood. O loader agora resolve
-a tarefa "nome de item de catálogo → código NCM de 8 dígitos" sobre
-`yurifacanha/NCM-RAFT-samall`. A implementação ASSIN 2 permanece no histórico
-do git (commit `79a8654` e anteriores).
+Dataset pivot (2026-11-15, SPEC-DARU.md): the benchmark solves "catalog item
+description → category" on DARU (18 largest Brazilian retailers, Darú et al.
+2022). The Excel ships the 5 columns squashed into 1 cell; the reading rule
+is csv (delimiter=';', quotechar='"') keeping only rows with exactly 5
+fields: description, segment, category, subcategory, canonical product.
 """
 
 import csv
-import logging
 import random
 import re
 from collections import Counter
 from collections.abc import Sequence
-from functools import lru_cache
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal, TypedDict
 
-from datasets import load_dataset
+from openpyxl import load_workbook
 
-logger = logging.getLogger(__name__)
+DARU_DATASET_ID = "gilsileydaru/classificao-produtos-varejo-cpg-prbr"
+DARU_XLSX_FILENAME = "DATASETPRODUTOSVAREJOBRASIL.xlsx"
 
-NCM_DATASET_ID = "yurifacanha/NCM-RAFT-samall"
-NCM_DATASET_FALLBACK_ID = "yurifacanha/NCM-dataset"
+_CATEGORIA_PREFIX = re.compile(r"^\d+\s*-\s*")
 
-# Taxonomia derivada das descrições embutidas no próprio dataset (decisão da
-# spec: derivar da fonte oficial OU do dataset; o dataset tem descrição única
-# por código — verificado em 2026-11-14, 114 códigos, 0 variantes).
-TAXONOMY_PATH: Final = Path(__file__).resolve().parents[2] / "config" / "ncm_taxonomy.csv"
+# Non-food/beverage categories out of benchmark scope (SPEC-DARU.md §2:
+# scope = food and beverage, as in the iFood context).
+_NON_FOOD_PATTERN = re.compile(
+    r"LIMPEZA|HIGIENE|COSMET|PET|BAZAR|ELETRO|PAPELARIA|UTENSIL|VESTU|CALCAD|"
+    r"TEXTIL|FARMA|JOIA|BRINQUEDO|ESPORT|AUTO|MOVEIS|JARDIM|LIVROS|BABY",
+    re.IGNORECASE,
+)
 
-Subset = Literal["head", "tail"]
-
-# "o codigo da categoria do ALCOOL LIQUIDO START NAT 70% - 5VL é: 22071090"
-_PAIR_PATTERN: Final = re.compile(r"o codigo da categoria do (.+?) é: (\d{8})")
-
-MIN_ITEM_NAME_LENGTH: Final = 3
+DaruRow = tuple[str, str]
 
 
 class DatasetDownloadError(Exception):
-    """Falha ao baixar ou acessar o dataset NCM no Hugging Face Hub."""
+    """Failed to download or locate the DARU xlsx via kagglehub."""
 
 
-class NCMTaxonomyEntry(TypedDict):
-    code: str
+@dataclass(frozen=True)
+class CatalogSample:
+    """Item of the frozen set (label level: category)."""
 
-    chapter: str
-
-    chapter_title: str
-
-    description: str
-
-
-class NCMItem(TypedDict):
-    """Um par (nome de item, código NCM) extraído do pool."""
-
-    item_id: int
-
-    name: str
-
-    ncm_code: str
+    sample_id: int
+    raw_text: str
+    canonical_category: str
+    is_long_tail: bool
 
 
-class NCMEvalSample(TypedDict):
-    """Item do conjunto congelado com o subconjunto head/tail anotado."""
+@dataclass(frozen=True)
+class BenchmarkSets:
+    """Frozen sets: validation (α selection) and test (final number)."""
 
-    item_id: int
-
-    name: str
-
-    ncm_code: str
-
-    code_freq: int
-
-    subset: Subset
+    validation: list[CatalogSample]
+    test: list[CatalogSample]
 
 
-class PoolStats(TypedDict):
-    """Estatísticas da sonda do Story 1 (impressas na célula de sonda)."""
+def parse_daru_cell(cell: str) -> DaruRow | None:
+    """Splits a squashed cell into (description, category); None on no match.
 
-    n_rows: int
-
-    n_parsed: int
-
-    extraction_rate: float
-
-    unique_pairs: int
-
-    unique_names: int
-
-    unique_codes: int
-
-    conflicting_names: int
-
-    dropped_short_names: int
-
-
-@lru_cache(maxsize=1)
-def load_taxonomy() -> dict[str, NCMTaxonomyEntry]:
-    """Carrega config/ncm_taxonomy.csv (114 códigos, 19 capítulos).
-
-    Levanta `ValueError` se o CSV tiver código duplicado, descrição vazia ou
-    código que não seja 8 dígitos (edge case da Story 2 da spec).
+    Only cells with exactly 5 fields pass (79% of the file per the spec);
+    the category's numeric prefix ("6-MERCEARIA") is stripped.
     """
-    taxonomy: dict[str, NCMTaxonomyEntry] = {}
-    with TAXONOMY_PATH.open(encoding="utf-8", newline="") as file:
-        for row in csv.DictReader(file):
-            code = row["code"]
-            if not re.fullmatch(r"\d{8}", code):
-                raise ValueError(f"taxonomy code must be 8 digits, got {code!r}")
-            if code in taxonomy:
-                raise ValueError(f"taxonomy has duplicate code {code}")
-            if not row["description"].strip():
-                raise ValueError(f"taxonomy code {code} has a blank description")
-            taxonomy[code] = NCMTaxonomyEntry(
-                code=code,
-                chapter=row["chapter"],
-                chapter_title=row["chapter_title"],
-                description=row["description"],
-            )
-    return taxonomy
-
-
-def is_valid_code(code: str, taxonomy: dict[str, NCMTaxonomyEntry] | None = None) -> bool:
-    """True quando `code` existe na taxonomia (gate de escalada do System 1)."""
-    entries = taxonomy if taxonomy is not None else load_taxonomy()
-    return code in entries
-
-
-def chapter_lines() -> list[str]:
-    """Lista compacta dos capítulos para o prefixo estático dos prompts.
-
-    Ordenada por código de capítulo; uma linha por capítulo no formato
-    "22 - Bebidas, líquidos alcoólicos e vinagres.".
-    """
-    chapters: dict[str, str] = {}
-    for entry in load_taxonomy().values():
-        chapters.setdefault(entry["chapter"], entry["chapter_title"])
-    return [f"{chapter} - {title}" for chapter, title in sorted(chapters.items())]
-
-
-def parse_conversation(conversations: list[dict[str, str]]) -> NCMItem | None:
-    """Extrai (nome, código) da mensagem do usuário; None se não casar.
-
-    O par canônico vive na PRIMEIRA mensagem (user): "o codigo da categoria
-    do {nome} é: {código}". A resposta do assistente às vezes traz o código e
-    às vezes só a descrição — por isso o parse não depende dela.
-    """
-    if not conversations:
+    fields = next(csv.reader([cell], delimiter=";", quotechar='"'), [])
+    if len(fields) != 5:
         return None
-    user_content = conversations[0].get("content", "")
-    match = _PAIR_PATTERN.search(user_content)
-    if match is None:
+    description = fields[0].strip()
+    categoria = _CATEGORIA_PREFIX.sub("", fields[2]).strip()
+    if not description or not categoria:
         return None
-    name = match.group(1).strip()
-    if len(name) < MIN_ITEM_NAME_LENGTH:
-        return None
-    return NCMItem(item_id=-1, name=name, ncm_code=match.group(2))
+    return description, categoria
 
 
-def load_ncm_pool(dataset_id: str = NCM_DATASET_ID) -> tuple[list[NCMItem], int]:
-    """Carrega o split train e parseia todas as conversas em NCMItem.
+def parse_daru_xlsx(path: str | Path) -> list[DaruRow]:
+    """Reads the single-column xlsx and returns the (description, category) rows.
 
-    Retorna (itens, total de linhas do split) para o cálculo honesto da taxa
-    de extração da sonda. `item_id` é o índice da linha no dataset
-    (determinístico). O dataset tem um único split `train`; não há split de
-    teste rotulado.
+    The first non-empty cell is the header and is skipped.
     """
+    workbook = load_workbook(path, read_only=True)
     try:
-        dataset = load_dataset(dataset_id, split="train")
-    except (OSError, ValueError) as error:
-        raise DatasetDownloadError(
-            f"failed to load '{dataset_id}' (split=train) from the Hugging Face Hub: {error}"
-        ) from error
-
-    items: list[NCMItem] = []
-    for index, row in enumerate(dataset):
-        parsed = parse_conversation(row["conversations"])
-        if parsed is None:
-            continue
-        items.append(NCMItem(item_id=index, name=parsed["name"], ncm_code=parsed["ncm_code"]))
-    return items, len(dataset)
-
-
-def pool_stats(items: Sequence[NCMItem], n_rows: int) -> PoolStats:
-    """Estatísticas do pool para a sonda (Story 1) — sem chamadas de API."""
-    unique_pairs = {(item["name"], item["ncm_code"]) for item in items}
-    codes_by_name: dict[str, set[str]] = {}
-    for name, code in unique_pairs:
-        codes_by_name.setdefault(name, set()).add(code)
-    conflicting = sum(1 for codes in codes_by_name.values() if len(codes) > 1)
-    short_names = sum(1 for name in codes_by_name if len(name) < MIN_ITEM_NAME_LENGTH)
-    return PoolStats(
-        n_rows=n_rows,
-        n_parsed=len(items),
-        extraction_rate=len(items) / n_rows if n_rows else 0.0,
-        unique_pairs=len(unique_pairs),
-        unique_names=len(codes_by_name),
-        unique_codes=len({code for _, code in unique_pairs}),
-        conflicting_names=conflicting,
-        dropped_short_names=short_names,
-    )
+        worksheet = workbook.active
+        assert worksheet is not None
+        rows: list[DaruRow] = []
+        header_seen = False
+        for row in worksheet.iter_rows(values_only=True):
+            if not row or row[0] is None:
+                continue
+            if not header_seen:
+                header_seen = True
+                continue
+            parsed = parse_daru_cell(str(row[0]))
+            if parsed is not None:
+                rows.append(parsed)
+        return rows
+    finally:
+        workbook.close()
 
 
-def get_frozen_eval_set(
-    items: Sequence[NCMItem],
-    *,
-    sample_limit: int = 800,
-    head_share: float = 0.65,
-    head_min_code_freq: int = 50,
-    seed: int = 42,
-) -> list[NCMEvalSample]:
-    """Amostra congelada head/tail (Story 3 da spec do pivot).
+def select_food_categories(
+    rows: Sequence[DaruRow], n: int = 12, min_rows: int = 500
+) -> list[tuple[str, int]]:
+    """Top-n categories by count, excluding non-food/beverage ones.
 
-    Pipeline: dedup de pares → exclusão de nomes conflitantes (mesmo nome com
-    códigos diferentes; contados e logados) → frequência de cada código no
-    pool limpo → head = códigos com >= `head_min_code_freq` ocorrências →
-    amostragem estratificada `round(sample_limit * head_share)` head + resto
-    tail com `random.Random(seed)`.
+    Drops names matching the non-food pattern (cleaning, hygiene, pet,
+    bazaar etc.) and categories with fewer than `min_rows` examples.
     """
-    if sample_limit <= 0:
-        raise ValueError(f"sample_limit must be positive, got {sample_limit}")
+    counts = Counter(categoria for _, categoria in rows)
+    eligible = [
+        (name, count)
+        for name, count in counts.items()
+        if count >= min_rows and not _NON_FOOD_PATTERN.search(name)
+    ]
+    eligible.sort(key=lambda item: (-item[1], item[0]))
+    return eligible[:n]
+
+
+def load_catalog_benchmark_set(
+    xlsx_path: str | Path,
+    categories: Sequence[str],
+    *,
+    n_validation: int,
+    n_test: int,
+    head_share: float,
+    tail_max_chars: int,
+    seed: int,
+) -> BenchmarkSets:
+    """Samples the stratified head/tail validation and test sets (SPEC-DARU.md §3).
+
+    Pipeline: parse → filter by the closed category set → case-insensitive
+    description dedup (first occurrence wins) → head (> `tail_max_chars`)
+    and tail (<= `tail_max_chars`) strata sorted by description → draw with
+    `random.Random(seed)`: validation first, test from what remains (no
+    overlap). Each set gets `round(n * head_share)` head items and the rest
+    tail. `sample_id` is sequential in the final order (validation, then
+    test).
+    """
+    if n_validation <= 0 or n_test <= 0:
+        raise ValueError(f"n_validation and n_test must be positive, got {n_validation}/{n_test}")
     if not 0.0 < head_share < 1.0:
         raise ValueError(f"head_share must be in (0, 1), got {head_share}")
-    if head_min_code_freq <= 0:
-        raise ValueError(f"head_min_code_freq must be positive, got {head_min_code_freq}")
+    if tail_max_chars < 0:
+        raise ValueError(f"tail_max_chars must be non-negative, got {tail_max_chars}")
 
-    unique_pairs = sorted({(item["name"], item["ncm_code"]) for item in items})
-    first_item_id = {(item["name"], item["ncm_code"]): item["item_id"] for item in items}
-    codes_by_name: dict[str, set[str]] = {}
-    for name, code in unique_pairs:
-        codes_by_name.setdefault(name, set()).add(code)
-    conflicting_names = {name for name, codes in codes_by_name.items() if len(codes) > 1}
-    if conflicting_names:
-        logger.warning(
-            "excluded %d conflicting item names (same name, different codes)",
-            len(conflicting_names),
-        )
+    allowed = set(categories)
+    seen: set[str] = set()
+    unique_rows: list[DaruRow] = []
+    for row in parse_daru_xlsx(_resolve_xlsx_path(Path(xlsx_path))):
+        if row[1] not in allowed:
+            continue
+        key = row[0].casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_rows.append(row)
 
-    clean_pairs = [(name, code) for name, code in unique_pairs if name not in conflicting_names]
-    code_freq = Counter(code for _, code in clean_pairs)
+    head_pool = sorted(row for row in unique_rows if len(row[0].strip()) > tail_max_chars)
+    tail_pool = sorted(row for row in unique_rows if len(row[0].strip()) <= tail_max_chars)
 
-    head_pool = [
-        (name, code) for name, code in clean_pairs if code_freq[code] >= head_min_code_freq
-    ]
-    tail_pool = [(name, code) for name, code in clean_pairs if code_freq[code] < head_min_code_freq]
-
-    n_head = round(sample_limit * head_share)
-    n_tail = sample_limit - n_head
-    for label, pool, wanted in (("head", head_pool, n_head), ("tail", tail_pool, n_tail)):
-        if len(pool) < wanted:
+    n_val_head = round(n_validation * head_share)
+    n_val_tail = n_validation - n_val_head
+    n_test_head = round(n_test * head_share)
+    n_test_tail = n_test - n_test_head
+    for label, available, wanted in (
+        ("validation head", len(head_pool), n_val_head),
+        ("validation tail", len(tail_pool), n_val_tail),
+        ("test head", len(head_pool) - n_val_head, n_test_head),
+        ("test tail", len(tail_pool) - n_val_tail, n_test_tail),
+    ):
+        if available < wanted:
             raise ValueError(
-                f"{label} pool has {len(pool)} unique pairs, needs {wanted}; "
-                f"adjust head_share/head_min_code_freq/sample_limit"
+                f"{label} pool has {available} unique rows, needs {wanted}; "
+                f"adjust categories/head_share/tail_max_chars/sample sizes"
             )
 
     rng = random.Random(seed)
-    sampled: list[NCMEvalSample] = []
+    validation = rng.sample(head_pool, n_val_head) + rng.sample(tail_pool, n_val_tail)
+    used = {row[0].casefold() for row in validation}
+    head_rest = [row for row in head_pool if row[0].casefold() not in used]
+    tail_rest = [row for row in tail_pool if row[0].casefold() not in used]
+    test = rng.sample(head_rest, n_test_head) + rng.sample(tail_rest, n_test_tail)
 
-    def _draw(pool: list[tuple[str, str]], wanted: int, subset: Subset) -> None:
-        for name, code in rng.sample(sorted(pool), wanted):
-            sampled.append(
-                NCMEvalSample(
-                    item_id=first_item_id[(name, code)],
-                    name=name,
-                    ncm_code=code,
-                    code_freq=code_freq[code],
-                    subset=subset,
-                )
-            )
-
-    _draw(head_pool, n_head, "head")
-    _draw(tail_pool, n_tail, "tail")
-    return sampled
+    samples = [
+        CatalogSample(
+            sample_id=sample_id,
+            raw_text=row[0],
+            canonical_category=row[1],
+            is_long_tail=len(row[0].strip()) <= tail_max_chars,
+        )
+        for sample_id, row in enumerate([*validation, *test])
+    ]
+    return BenchmarkSets(
+        validation=samples[:n_validation],
+        test=samples[n_validation:],
+    )
 
 
-def truncate_code(code: str, digits: int = 8) -> str:
-    """Trunca o código para `digits` dígitos (granularidade do rótulo).
+def _resolve_xlsx_path(xlsx_path: Path) -> Path:
+    if xlsx_path.exists():
+        return xlsx_path
+    import kagglehub
 
-    `digits` válido: 2 (capítulo), 4 (posição), 6 (subposição) ou 8 (item).
-    A sonda do notebook decide o nível; o truncamento é aplicado de forma
-    idêntica a predições e ground truths na avaliação.
-    """
-    if digits not in (2, 4, 6, 8):
-        raise ValueError(f"digits must be one of (2, 4, 6, 8), got {digits}")
-    return code[:digits]
+    root = Path(kagglehub.dataset_download(DARU_DATASET_ID))
+    matches = sorted(root.rglob(DARU_XLSX_FILENAME))
+    if not matches:
+        raise DatasetDownloadError(
+            f"{DARU_XLSX_FILENAME} not found inside kagglehub download {root}"
+        )
+    return matches[0]

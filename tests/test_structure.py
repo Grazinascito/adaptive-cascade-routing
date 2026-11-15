@@ -1,4 +1,4 @@
-"""Teste de fundação: todo módulo esqueleto sob src/ importa sem erro."""
+"""Foundation test: every skeleton module under src/ imports without error."""
 
 import importlib
 

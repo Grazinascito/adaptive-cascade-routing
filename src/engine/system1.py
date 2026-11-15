@@ -1,158 +1,175 @@
-"""System1Engine — classificação NCM em geração curta com confiança por logprobs.
+"""System1Engine — typed 1-token decision on the vLLM /v1/systemone endpoint.
 
-Pivot NCM (2026-11-14):
-com 114 códigos candidatos, a pergunta `choice` binária do `/v1/systemone`
-não se aplica; o fast-path passa a ser uma chamada `/v1/chat/completions`
-com `max_tokens` curto (12), sem raciocínio, produzindo o código de 8
-dígitos. A confiança é a média geométrica das probabilidades dos tokens
-gerados — exp(Σ ln p / n), menos punitiva que o produto puro em códigos de
-8 dígitos — e código inexistente na taxonomia vira confiança 0.0 (escala
-imediatamente, espelhando o "caso novo → fallback" do blog do iFood). A
-implementação anterior (`/v1/systemone`) permanece no histórico do git.
+Restored from commit 79a8654 (vLLM >= 0.32.0 Structured Decisions API) and
+adapted to DARU: the food/beverage categories arrive as a parameter, each
+becomes an option with a 1-letter alias (A–L) in the `choice` question, and
+the response already carries the per-alias probability (server softmax).
+The client renormalizes (softmax over the log-probs, with a floor for
+zero-probability options) before computing P_top and entropy. The request
+carries NO `max_tokens` and no `logprobs` — the endpoint rejects both with
+HTTP 400.
 """
 
 import math
-import re
+import time
 from collections.abc import Mapping, Sequence
-from typing import Final, TypedDict
+from dataclasses import dataclass
+from typing import Final
 
 import httpx
 
-from src.data.loader import chapter_lines, is_valid_code
-from src.engine.router import shannon_entropy
-from src.engine.serving import DEFAULT_BASE_URL, DEFAULT_MODEL, post_json
+DEFAULT_MODEL: Final = "Qwen/Qwen3-4B-AWQ"
+DEFAULT_BASE_URL: Final = "http://127.0.0.1:8000/v1"
+DEFAULT_TIMEOUT_S: Final = 10.0
 
-NCM_CODE_PATTERN: Final = re.compile(r"\b(\d{8})\b")
+ALIASES: Final = "ABCDEFGHIJKL"
+LOGPROB_FLOOR: Final = -100.0
 
-DEFAULT_MAX_TOKENS: Final = 12
-DEFAULT_TOP_LOGPROBS: Final = 20
-
-INVALID_CODE_SENTINEL: Final = "00000000"
-
+QUESTION_ID: Final = "category"
+QUESTION_INSTRUCTIONS: Final = (
+    "Qual apelido classifica corretamente o item? Escolha exatamente uma das opções permitidas."
+)
 SYSTEM1_INSTRUCTIONS: Final = (
-    "Você é um classificador de itens de catálogo brasileiro.\n"
-    "Receba o nome de um item e responda com o código NCM de 8 dígitos "
-    "correspondente, de acordo com a Nomenclatura Comum do Mercosul.\n"
-    "Capítulos disponíveis neste catálogo:\n"
-    + "\n".join(chapter_lines())
-    + "\nResponda apenas com o código de 8 dígitos, sem texto adicional."
+    "Você é o System 1 do roteador de categorias de comida e bebida. Classifique o item "
+    "de nota fiscal em exatamente uma das categorias permitidas, cada uma identificada "
+    "pelo seu apelido de uma letra de A a L."
 )
 
 
-class System1Output(TypedDict):
-    """Saída do fast-path NCM.
-
-    `code` é `INVALID_CODE_SENTINEL` quando a resposta não contém código de
-    8 dígitos; nesse caso `valid_code=False` e `confidence=0.0` (escala ao
-    System 2). `entropy` é a entropia de Shannon sobre a distribuição
-    top-logprobs do primeiro token gerado — o ponto onde o modelo "decide"
-    o início do código. `prompt_tokens`/`completion_tokens` vêm do `usage`
-    do chat completions (o fast-path também custa tokens; a economia do
-    KPI de custo é medida contra o slow-path, não zerada).
-    """
-
-    code: str
-
-    confidence: float
-
+@dataclass(frozen=True, slots=True)
+class System1Output:
+    top_choice: str
+    top_probability: float
+    raw_probabilities: dict[str, float]
+    normalized_probabilities: dict[str, float]
     entropy: float
-
-    valid_code: bool
-
-    prompt_tokens: int
-
-    completion_tokens: int
-
     latency_ms: float
 
 
-def _confidence_from_logprobs(logprobs: Sequence[float]) -> float:
-    """Média geométrica das probabilidades: exp(Σ ln p / n)."""
-    if not logprobs:
-        return 0.0
-    return math.exp(sum(logprobs) / len(logprobs))
+def assign_aliases(allowed_categories: Sequence[str]) -> dict[str, str]:
+    """Maps alias (A–L, by position) -> original category name.
+
+    Compares lowercase to detect duplicates; validates before any HTTP.
+    """
+    categories = list(allowed_categories)
+    if not categories:
+        raise ValueError("allowed_categories must not be empty")
+    if len(categories) > len(ALIASES):
+        raise ValueError(
+            f"allowed_categories supports at most {len(ALIASES)} entries, got {len(categories)}"
+        )
+    if len(categories) < 2:
+        raise ValueError(f"allowed_categories needs at least two entries, got {categories!r}")
+    if any(not category.strip() for category in categories):
+        raise ValueError(f"allowed_categories must be non-blank names, got {categories!r}")
+    normalized = [category.strip().lower() for category in categories]
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(
+            f"allowed_categories must be unique after lowercase normalization, got {categories!r}"
+        )
+    return dict(zip(ALIASES[: len(categories)], categories, strict=True))
 
 
-def _entropy_from_top_logprobs(
-    top_entries: Sequence[Mapping[str, float]],
-) -> float:
-    """Entropia de Shannon (bits) sobre a distribuição top-k normalizada."""
-    weights = [math.exp(entry["logprob"]) for entry in top_entries]
-    total = sum(weights)
-    if total <= 0.0:
-        return 0.0
-    # Chaves indexadas: pesos iguais são entradas distintas da distribuição
-    # (uma chave única colapsaria a soma e reduziria a entropia).
-    return shannon_entropy({str(index): weight / total for index, weight in enumerate(weights)})
+def _renormalized_probabilities(
+    raw: Mapping[str, float],
+    aliases: Sequence[str],
+) -> dict[str, float]:
+    """Softmax over ln(P) of the aliases; missing or zero P gets LOGPROB_FLOOR.
+
+    Renormalizes server outputs that do not sum to 1: exp(ln(P)) = P and
+    the softmax divides by the total. Subtracting the max avoids overflow
+    in exp.
+    """
+    if not any(raw.get(alias, 0.0) > 0.0 for alias in aliases):
+        raise ValueError(f"no positive probability for any of the aliases {list(aliases)}")
+    logprobs = {
+        alias: math.log(raw[alias]) if raw.get(alias, 0.0) > 0.0 else LOGPROB_FLOOR
+        for alias in aliases
+    }
+    top_logprob = max(logprobs.values())
+    exps = {alias: math.exp(value - top_logprob) for alias, value in logprobs.items()}
+    total = sum(exps.values())
+    return {alias: value / total for alias, value in exps.items()}
 
 
-def evaluate_short_classification(
-    item_name: str,
+def _shannon_entropy_bits(probabilities: Mapping[str, float]) -> float:
+    return -sum(p * math.log2(p) for p in probabilities.values() if p > 0.0)
+
+
+def _build_request_body(
+    item_text: str,
+    aliases: Sequence[str],
+    model: str,
+    instructions: str,
+) -> dict[str, object]:
+    return {
+        "model": model,
+        "state": item_text,
+        "instructions": instructions,
+        "questions": {
+            QUESTION_ID: {
+                "type": "choice",
+                "instructions": QUESTION_INSTRUCTIONS,
+                "criteria": {alias: None for alias in aliases},
+            }
+        },
+    }
+
+
+def evaluate_typed_decision(
+    item_text: str,
+    allowed_categories: Sequence[str],
     *,
     model: str = DEFAULT_MODEL,
     base_url: str = DEFAULT_BASE_URL,
     instructions: str = SYSTEM1_INSTRUCTIONS,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
-    top_logprobs: int = DEFAULT_TOP_LOGPROBS,
-    temperature: float = 0.0,
-    timeout_s: float = 10.0,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
     client: httpx.Client | None = None,
 ) -> System1Output:
-    """Executa o fast-path NCM e retorna código + confiança.
+    """Runs the 1-token decision; returns P_top/entropy already renormalized.
 
-    Erros de status/timeout/conexão do httpx propagam — o fallback gracioso
-    é responsabilidade do harness (Componente G).
+    `instructions` (fixed prefix, identical in every query for vLLM prefix
+    caching) goes in the field of the same name; the variable item text
+    goes in `state`. httpx status errors propagate — graceful fallback is
+    the harness's job.
     """
-    if not item_name.strip():
-        raise ValueError("item_name must be a non-blank string")
+    if not item_text.strip():
+        raise ValueError(f"item_text must be non-blank, got {item_text!r}")
 
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": instructions},
-            {"role": "user", "content": item_name},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "logprobs": True,
-        "top_logprobs": top_logprobs,
-        # Qwen3 "original" pensa por padrão no template de chat; a geração
-        # curta do fast-path não pode abrir bloco <think>.
-        "chat_template_kwargs": {"enable_thinking": False},
+    alias_to_category = assign_aliases(allowed_categories)
+    aliases = list(alias_to_category)
+    body = _build_request_body(item_text, aliases, model, instructions)
+
+    owns_client = client is None
+    active_client = client if client is not None else httpx.Client()
+    try:
+        started = time.perf_counter()
+        response = active_client.post(f"{base_url}/systemone", json=body, timeout=timeout_s)
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        response.raise_for_status()
+    finally:
+        if owns_client:
+            active_client.close()
+
+    answer = response.json()["answers"][QUESTION_ID]
+    raw_probabilities = {
+        alias: float(probability) for alias, probability in answer["probabilities"].items()
     }
-
-    response, latency_ms = post_json(client, f"{base_url}/chat/completions", payload, timeout_s)
-
-    data = response.json()
-    choice = (data.get("choices") or [{}])[0]
-    message = choice.get("message") or {}
-    raw_content = message.get("content")
-    content = raw_content if isinstance(raw_content, str) else ""
-
-    match = NCM_CODE_PATTERN.search(content)
-    code = match.group(1) if match else INVALID_CODE_SENTINEL
-    valid = match is not None and is_valid_code(code)
-
-    token_logprobs: list[float] = []
-    first_token_top: list[dict[str, float]] = []
-    logprobs_payload = choice.get("logprobs") or {}
-    content_logprobs = logprobs_payload.get("content") or []
-    for position, entry in enumerate(content_logprobs):
-        if isinstance(entry.get("logprob"), (int, float)):
-            token_logprobs.append(float(entry["logprob"]))
-        if position == 0:
-            first_token_top = list(entry.get("top_logprobs") or [])
-
-    confidence = _confidence_from_logprobs(token_logprobs) if valid else 0.0
-    entropy = _entropy_from_top_logprobs(first_token_top)
-
-    usage = data.get("usage") or {}
+    alias_probabilities = _renormalized_probabilities(raw_probabilities, aliases)
+    normalized_probabilities = {
+        alias_to_category[alias]: probability for alias, probability in alias_probabilities.items()
+    }
+    top_probability = max(normalized_probabilities.values())
+    top_choice = next(
+        category
+        for category in alias_to_category.values()
+        if normalized_probabilities[category] == top_probability
+    )
     return System1Output(
-        code=code,
-        confidence=confidence,
-        entropy=entropy,
-        valid_code=valid,
-        prompt_tokens=int(usage.get("prompt_tokens") or 0),
-        completion_tokens=int(usage.get("completion_tokens") or 0),
+        top_choice=top_choice,
+        top_probability=top_probability,
+        raw_probabilities=raw_probabilities,
+        normalized_probabilities=normalized_probabilities,
+        entropy=_shannon_entropy_bits(normalized_probabilities),
         latency_ms=latency_ms,
     )

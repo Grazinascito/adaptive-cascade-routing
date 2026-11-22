@@ -1,14 +1,17 @@
-"""vLLMServerManager — gerencia o ciclo de vida do processo servidor vLLM em background.
+"""vLLMServerManager — vLLM server lifecycle for the DARU benchmark.
 
-Componente B. O módulo
-nunca importa vllm: o servidor é lançado como subprocesso (CI/macOS não têm
-CUDA — ADR-0001).
+Starts `Qwen/Qwen3-4B-AWQ` (4-bit AWQ) as a subprocess with prefix caching
+and 90% of VRAM, ready for the /v1/systemone and /v1/chat/completions
+endpoints. The module never imports vllm: CI/macOS have no CUDA — the
+server runs as a subprocess (ADR-0001) and the health check is
+GET /v1/models until it answers 200.
 """
 
 import logging
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from typing import Final
 
 import httpx
@@ -18,49 +21,48 @@ logger = logging.getLogger(__name__)
 VLLM_LOG_PATH: Final = "vllm_server.log"
 HEALTH_POLL_INTERVAL_S: Final = 2.0
 MODELS_TIMEOUT_S: Final = 5.0
+DEFAULT_GPU_MEMORY_UTILIZATION: Final = 0.90
+DEFAULT_STARTUP_TIMEOUT_S: Final = 900.0
 _NVIDIA_SMI_TIMEOUT_S: Final = 5.0
 
 _process: "subprocess.Popen[bytes] | None" = None
 
 
 class vLLMServerException(Exception):
-    """Falha ao subir ou manter o servidor vLLM (crash, OOM ou timeout de startup)."""
+    """Failed to start or keep the vLLM server up (crash, OOM or startup timeout)."""
 
 
-def _build_server_command(
-    model_name: str,
-    *,
-    host: str,
+def build_server_command(
+    model: str,
     port: int,
-    quantization: str,
-    enable_prefix_caching: bool,
-    gpu_memory_utilization: float,
-    logprobs_mode: str,
+    extra_flags: Sequence[str] = (),
+    *,
+    host: str = "127.0.0.1",
+    gpu_memory_utilization: float = DEFAULT_GPU_MEMORY_UTILIZATION,
+    enable_prefix_caching: bool = True,
 ) -> list[str]:
+    """vLLM launch argv: model, port, 90% of VRAM and prefix caching."""
     command = [
         sys.executable,
         "-m",
         "vllm.entrypoints.openai.api_server",
         "--model",
-        model_name,
+        model,
         "--host",
         host,
         "--port",
         str(port),
-        "--quantization",
-        quantization,
         "--gpu-memory-utilization",
         str(gpu_memory_utilization),
-        "--logprobs-mode",
-        logprobs_mode,
     ]
     if enable_prefix_caching:
         command.append("--enable-prefix-caching")
+    command.extend(extra_flags)
     return command
 
 
 def _read_vram_usage_raw() -> str | None:
-    """Lê o stdout bruto do nvidia-smi (valores em MiB); None se indisponível."""
+    """Reads raw nvidia-smi stdout (values in MiB); None if unavailable."""
     try:
         result = subprocess.run(
             [
@@ -78,10 +80,12 @@ def _read_vram_usage_raw() -> str | None:
     return result.stdout.strip() or None
 
 
-def health_check(base_url: str = "http://127.0.0.1:8000", *, timeout_s: float = 5.0) -> bool:
-    """Retorna True se o servidor responde 200 em /health; qualquer erro vira False."""
+def health_check(
+    base_url: str = "http://127.0.0.1:8000", *, timeout_s: float = MODELS_TIMEOUT_S
+) -> bool:
+    """True when GET /v1/models answers 200; any error becomes False."""
     try:
-        response = httpx.get(f"{base_url}/health", timeout=timeout_s)
+        response = httpx.get(f"{base_url.rstrip('/')}/v1/models", timeout=timeout_s)
     except httpx.HTTPError:
         return False
     return response.status_code == 200
@@ -90,14 +94,14 @@ def health_check(base_url: str = "http://127.0.0.1:8000", *, timeout_s: float = 
 def _server_has_model(
     base_url: str, model_name: str, *, timeout_s: float = MODELS_TIMEOUT_S
 ) -> bool | None:
-    """Confere via /v1/models se o servidor serve `model_name`.
+    """Checks via /v1/models whether the server serves `model_name`.
 
-    Devolve True/False conforme a lista de modelos carregados; None quando
-    a lista não pôde ser obtida (erro de conexão ou status != 200) — caso
-    em que o reuso segue com warning em vez de falhar.
+    Returns True/False from the loaded model list; None when the list could
+    not be fetched (connection error or status != 200) — in that case reuse
+    continues with a warning instead of failing.
     """
     try:
-        response = httpx.get(f"{base_url}/v1/models", timeout=timeout_s)
+        response = httpx.get(f"{base_url.rstrip('/')}/v1/models", timeout=timeout_s)
     except httpx.HTTPError:
         return None
     if response.status_code != 200:
@@ -107,7 +111,7 @@ def _server_has_model(
 
 
 def _startup_failure_context(command: list[str]) -> str:
-    """Cauda comum das mensagens de falha de startup: log, VRAM e restart."""
+    """Common tail for startup failure messages: log, VRAM and restart."""
     vram = _read_vram_usage_raw()
     return (
         f"See '{VLLM_LOG_PATH}' and GPU VRAM (MiB used,total): "
@@ -117,49 +121,47 @@ def _startup_failure_context(command: list[str]) -> str:
 
 
 def start_server(
-    model_name: str,
+    model: str,
     *,
     host: str = "127.0.0.1",
     port: int = 8000,
-    quantization: str = "awq",
+    extra_flags: Sequence[str] = (),
     enable_prefix_caching: bool = True,
-    gpu_memory_utilization: float = 0.90,
-    logprobs_mode: str = "raw_logprobs",
-    startup_timeout_s: float = 90.0,
+    gpu_memory_utilization: float = DEFAULT_GPU_MEMORY_UTILIZATION,
+    startup_timeout_s: float = DEFAULT_STARTUP_TIMEOUT_S,
 ) -> bool:
-    """Sobe o servidor vLLM e espera /health ficar pronto (FR-001).
+    """Starts the vLLM server and waits for /v1/models to answer 200.
 
-    Reusa um servidor já saudável — conferindo via /v1/models que ele serve
-    `model_name`; sem a lista, reusa com warning. Se o processo morrer
-    durante o startup ou o health nunca passar dentro de
-    `startup_timeout_s`, registra o evento de falha no log e levanta
-    `vLLMServerException` com instruções de restart e a leitura de VRAM
-    (edge case de crash/OOM da spec).
+    Reuses an already healthy server — checking via /v1/models that it
+    serves `model`; without the list, reuses with a warning. If the process
+    dies during startup or health never passes within `startup_timeout_s`,
+    logs the event and raises `vLLMServerException` with restart
+    instructions and the VRAM reading (the crash/OOM edge case from the
+    spec).
     """
     global _process
-    command = _build_server_command(
-        model_name,
+    command = build_server_command(
+        model,
+        port,
+        extra_flags,
         host=host,
-        port=port,
-        quantization=quantization,
-        enable_prefix_caching=enable_prefix_caching,
         gpu_memory_utilization=gpu_memory_utilization,
-        logprobs_mode=logprobs_mode,
+        enable_prefix_caching=enable_prefix_caching,
     )
-    health_url = f"http://{host}:{port}"
-    if health_check(health_url):
-        has_model = _server_has_model(health_url, model_name)
+    base_url = f"http://{host}:{port}"
+    if health_check(base_url):
+        has_model = _server_has_model(base_url, model)
         if has_model is False:
             raise vLLMServerException(
-                f"A healthy vLLM server is already running at {health_url} but does not "
-                f"serve model '{model_name}'. Stop it with stop_server() or pick another port."
+                f"A healthy vLLM server is already running at {base_url} but does not "
+                f"serve model '{model}'. Stop it with stop_server() or pick another port."
             )
         if has_model is None:
             logger.warning(
                 "could not list models of the healthy server at %s; reusing it without "
                 "verifying it serves '%s'",
-                health_url,
-                model_name,
+                base_url,
+                model,
             )
         return True
 
@@ -175,12 +177,12 @@ def start_server(
             )
             logger.error("vLLM startup failed: %s", message)
             raise vLLMServerException(message)
-        if health_check(health_url):
+        if health_check(base_url):
             return True
         time.sleep(HEALTH_POLL_INTERVAL_S)
 
     message = (
-        f"vLLM server did not become healthy at {health_url} within {startup_timeout_s}s. "
+        f"vLLM server did not become healthy at {base_url} within {startup_timeout_s}s. "
         f"{_startup_failure_context(command)}"
     )
     logger.error("vLLM startup failed: %s", message)
@@ -188,7 +190,7 @@ def start_server(
 
 
 def stop_server() -> None:
-    """Termina o processo que este módulo spawnou; no-op caso contrário."""
+    """Terminates the process this module spawned; no-op otherwise."""
     global _process
     if _process is None:
         return

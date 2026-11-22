@@ -1,8 +1,8 @@
-"""Constantes de serving e helper de HTTP compartilhados pelos engines.
+"""Shared serving constants and HTTP helper used by both engines.
 
-System 1 e System 2 falam com o mesmo servidor vLLM local; este módulo
-reúne o que os dois usam (modelo padrão, base URL e o POST com medição de
-latência) para que nenhum engine dependa do outro.
+System 1 and System 2 talk to the same local vLLM server; this module holds
+what both use (default model, base URL and the latency-measured POST) so
+neither engine depends on the other.
 """
 
 import time
@@ -20,11 +20,11 @@ def post_json(
     body: dict[str, Any],
     timeout_s: float,
 ) -> tuple[httpx.Response, float]:
-    """Executa o POST JSON em `url` e devolve (response, latency_ms).
+    """POSTs the JSON body to `url` and returns (response, latency_ms).
 
-    Cria e fecha o client quando `client` é None; erros de status propagam
-    via `raise_for_status` (o fallback gracioso é papel do harness,
-    Componente G).
+    Creates and closes the client when `client` is None; status errors
+    propagate via `raise_for_status` (graceful fallback is the harness's
+    job, Component G).
     """
     owns_client = client is None
     active_client = client if client is not None else httpx.Client()

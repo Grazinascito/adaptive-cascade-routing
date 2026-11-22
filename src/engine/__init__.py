@@ -1,1 +1,1 @@
-"""Pacote do motor de serving e roteamento: vLLM, System 1, System 2 e Cascade Router."""
+"""Serving and routing engine package: vLLM, System 1, System 2 and the Cascade Router."""

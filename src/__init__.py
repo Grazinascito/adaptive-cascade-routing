@@ -1,1 +1,1 @@
-"""Pacote raiz do benchmark Adaptive Cascade Routing (System 1 vs System 2 para NLI em PT-BR)."""
+"""Root package of the Adaptive Cascade Routing benchmark (System 1 vs System 2)."""

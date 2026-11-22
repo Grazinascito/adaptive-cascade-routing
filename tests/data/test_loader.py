@@ -1,151 +1,228 @@
-"""Testes do loader NCM: parser, taxonomia e amostragem congelada head/tail.
+"""Tests for the DARU loader: parser, closed-set filter, dedup and stratified sampling.
 
-Sem rede: o parser roda sobre stubs de conversa no formato real do dataset
-(yurifacanha/NCM-RAFT-samall, colunas conversation_id/conversations com
-papel 'user'/'assistant'); a taxonomia lê o CSV commitado
-config/ncm_taxonomy.csv; a amostragem roda sobre itens sintéticos.
+No network: data comes from tests/fixtures/daru_sample.json (40 REAL rows
+sampled from the cached xlsx with random.Random(42)); the temporary xlsx
+files are built with openpyxl from those rows, re-squashing the 5 fields
+into 1 cell in the original file's format.
 """
 
+import csv
+import io
+import json
+from pathlib import Path
+
 import pytest
+from openpyxl import Workbook
 
 from src.data import loader
 
+FIXTURE_PATH = Path(__file__).parent.parent / "fixtures" / "daru_sample.json"
 
-def _conversation(name: str, code: str, description: str = "Bebidas, líquidos alcoólicos.") -> list:
-    return [
-        {
-            "role": "user",
-            "content": (
-                " contexto: [o codigo da categoria do "
-                f"{name} é: {code}],"
-                f"[a categoria {code} possui a seguinte descrição: {description}]"
-            ),
-        },
-        {"role": "assistant", "content": f"o produto {name} possui categoria: {description}"},
+
+def fixture_rows() -> list[tuple[str, str]]:
+    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    return [(row["description"], row["categoria"]) for row in payload]
+
+
+def squish(description: str, categoria: str, *, prefix: str = "6-") -> str:
+    """Rebuilds a squashed 5-field cell in DARU's real format."""
+    buffer = io.StringIO()
+    csv.writer(buffer, delimiter=";", quotechar='"', lineterminator="").writerow(
+        [description, "1-BENS DE CONSUMO", f"{prefix}{categoria}", "9-SUBCATEGORIA", "PRODUTO"]
+    )
+    return buffer.getvalue()
+
+
+def write_xlsx(path: Path, cells: list[str]) -> Path:
+    workbook = Workbook()
+    sheet = workbook.active
+    assert sheet is not None
+    sheet.append([squish("nm_item", "categoria", prefix="")])
+    for cell in cells:
+        sheet.append([cell])
+    workbook.save(path)
+    return path
+
+
+class TestParseDaruCell:
+    def test_keeps_real_five_field_cell_and_strips_categoria_prefix(self) -> None:
+        description, categoria = fixture_rows()[0]
+        parsed = loader.parse_daru_cell(squish(description, categoria))
+        assert parsed == (description, categoria)
+
+    def test_strips_prefix_with_spaces_around_the_dash(self) -> None:
+        parsed = loader.parse_daru_cell(squish("ACUCAR REF DOCE KG", "MERCEARIA", prefix="10 - "))
+        assert parsed == ("ACUCAR REF DOCE KG", "MERCEARIA")
+
+    def test_drops_cells_without_exactly_five_fields(self) -> None:
+        assert loader.parse_daru_cell("DESCRICAO SEM PONTO E VIRGULA") is None
+        assert loader.parse_daru_cell('A;"1-X";"2-Y"') is None
+        assert loader.parse_daru_cell('A;"1-X";"2-Y";"3-Z";"4-W";"5-V"') is None
+
+    def test_drops_cells_with_empty_description_or_categoria(self) -> None:
+        assert loader.parse_daru_cell(squish("   ", "MERCEARIA")) is None
+        assert loader.parse_daru_cell(squish("ACUCAR KG", "  ")) is None
+
+
+class TestParseDaruXlsx:
+    def test_reads_column_skips_header_and_drops_bad_rows(self, tmp_path: Path) -> None:
+        rows = fixture_rows()[:3]
+        cells = [
+            squish(*rows[0]),
+            "APRESUNTADO SEM TAXONOMIA",
+            'A;"1-X";"2-Y"',
+            squish(*rows[1]),
+            squish(*rows[2]),
+        ]
+        parsed = loader.parse_daru_xlsx(write_xlsx(tmp_path / "daru.xlsx", cells))
+        assert parsed == rows
+
+
+class TestSelectFoodCategories:
+    def test_ranks_by_count_excludes_non_food_and_min_rows(self) -> None:
+        rows = (
+            [("ITEM A", "MERCEARIA")] * 600
+            + [("ITEM B", "BEBIDAS ALCOOLICAS")] * 550
+            + [("ITEM C", "PRODUTOS DE LIMPEZA")] * 900
+            + [("ITEM D", "LACTEOS")] * 499
+            + [("ITEM E", "HORTIFRUTI (FLV)")] * 500
+        )
+        selected = loader.select_food_categories(rows, n=2, min_rows=500)
+        assert selected == [("MERCEARIA", 600), ("BEBIDAS ALCOOLICAS", 550)]
+
+    def test_breaks_count_ties_by_name_for_determinism(self) -> None:
+        rows = [("X1", "AA")] * 500 + [("X2", "AB")] * 500 + [("X3", "AC")] * 700
+        assert loader.select_food_categories(rows, n=3, min_rows=500) == [
+            ("AC", 700),
+            ("AA", 500),
+            ("AB", 500),
+        ]
+
+    def test_fixture_rows_never_trigger_the_non_food_pattern_on_food_names(self) -> None:
+        rows = [(desc, "MERCEARIA") for desc, _ in fixture_rows()]
+        assert loader.select_food_categories(rows, n=1, min_rows=1) == [("MERCEARIA", len(rows))]
+
+
+def _big_pool() -> list[tuple[str, str]]:
+    rows = fixture_rows()
+    heads = [(f"CERVEJA ARTESANAL LAGOA SECA GARRAFA {i:03d}", "MERCEARIA") for i in range(30)] + [
+        (f"IOGURTE MORANGO COPO 180G CASA {i:03d}", "FRIOS E LATICINIOS") for i in range(30)
     ]
-
-
-class TestParseConversation:
-    def test_parses_conversation_into_name_and_code(self) -> None:
-        item = loader.parse_conversation(_conversation("ALCOOL LIQUIDO START NAT 70%", "22071090"))
-        assert item is not None
-        assert item["name"] == "ALCOOL LIQUIDO START NAT 70%"
-        assert item["ncm_code"] == "22071090"
-
-    def test_reports_none_when_answer_has_no_eight_digit_code(self) -> None:
-        broken = [
-            {"role": "user", "content": " contexto sem o par canonico de codigo"},
-        ]
-        assert loader.parse_conversation(broken) is None
-
-    def test_reports_none_for_empty_conversation(self) -> None:
-        assert loader.parse_conversation([]) is None
-
-    def test_drops_names_shorter_than_minimum_length(self) -> None:
-        item = loader.parse_conversation(_conversation("AB", "22071090"))
-        assert item is None
-
-
-class TestTaxonomy:
-    def test_is_valid_code_accepts_known_and_rejects_unknown_codes(self) -> None:
-        taxonomy = loader.load_taxonomy()
-        assert loader.is_valid_code("22071090", taxonomy) is True
-        assert loader.is_valid_code("99999999", taxonomy) is False
-        assert loader.is_valid_code("00000000", taxonomy) is False
-
-    def test_taxonomy_csv_has_unique_codes_and_no_blank_descriptions(self) -> None:
-        taxonomy = loader.load_taxonomy()
-        assert len(taxonomy) > 0
-        assert len({entry["code"] for entry in taxonomy.values()}) == len(taxonomy)
-        assert all(entry["description"].strip() for entry in taxonomy.values())
-
-    def test_chapter_lines_list_every_chapter_once(self) -> None:
-        lines = loader.chapter_lines()
-        assert len(lines) == len({line.split(" - ")[0] for line in lines})
-        assert all(line[:2].isdigit() for line in lines)
-
-
-class TestPoolStats:
-    def test_extraction_success_rate_counts_malformed_rows(self) -> None:
-        items = [
-            loader.NCMItem(item_id=i, name=f"ITEM {i} XYZ", ncm_code="22071090") for i in range(970)
-        ]
-        stats = loader.pool_stats(items, n_rows=1000)
-        assert stats["n_rows"] == 1000
-        assert stats["n_parsed"] == 970
-        assert stats["extraction_rate"] == pytest.approx(0.97)
-        assert stats["unique_codes"] == 1
-
-    def test_conflicting_names_are_counted(self) -> None:
-        items = [
-            loader.NCMItem(item_id=0, name="AGUA MINERAL", ncm_code="22011000"),
-            loader.NCMItem(item_id=1, name="AGUA MINERAL", ncm_code="22019000"),
-            loader.NCMItem(item_id=2, name="REFRIGERANTE COLA", ncm_code="22021000"),
-        ]
-        stats = loader.pool_stats(items, n_rows=3)
-        assert stats["conflicting_names"] == 1
-        assert stats["unique_names"] == 2
-
-
-def _pool_with_codes(codes_by_name: dict[str, str]) -> list[loader.NCMItem]:
-    return [
-        loader.NCMItem(item_id=index, name=name, ncm_code=code)
-        for index, (name, code) in enumerate(codes_by_name.items())
+    tails = [(f"REFRI {i:02d}", "MERCEARIA") for i in range(15)] + [
+        (f"IOG {i:02d}", "FRIOS E LATICINIOS") for i in range(15)
     ]
+    return rows + heads + tails
 
 
-class TestFrozenEvalSet:
-    def _pool(self) -> list[loader.NCMItem]:
-        pool: dict[str, str] = {}
-        # 1 código head (60 itens) + 2 códigos tail (3 itens cada).
-        for i in range(60):
-            pool[f"ITEM HEAD {i} AAA"] = "22071090"
-        for i in range(3):
-            pool[f"ITEM TAIL UM {i} BBB"] = "33072010"
-            pool[f"ITEM TAIL DOIS {i} CCC"] = "96190000"
-        return _pool_with_codes(pool)
+def _write_pool_xlsx(tmp_path: Path, rows: list[tuple[str, str]]) -> Path:
+    return write_xlsx(tmp_path / "pool.xlsx", [squish(desc, cat) for desc, cat in rows])
 
-    def test_frozen_eval_set_is_deterministic_with_seed_42(self) -> None:
-        first = loader.get_frozen_eval_set(self._pool(), sample_limit=10, head_share=0.6)
-        second = loader.get_frozen_eval_set(self._pool(), sample_limit=10, head_share=0.6)
-        assert first == second
 
-    def test_head_tail_proportions_match_configured_target(self) -> None:
-        samples = loader.get_frozen_eval_set(self._pool(), sample_limit=10, head_share=0.6)
-        heads = [sample for sample in samples if sample["subset"] == "head"]
-        tails = [sample for sample in samples if sample["subset"] == "tail"]
-        assert len(heads) == 6
-        assert len(tails) == 4
-        assert all(sample["ncm_code"] == "22071090" for sample in heads)
-        assert all(sample["ncm_code"] != "22071090" for sample in tails)
+FOOD_CATEGORIES = ["MERCEARIA", "FRIOS E LATICINIOS"]
 
-    def test_conflicting_names_are_excluded_and_counted(self) -> None:
-        pool = self._pool()
-        # Mesmo nome em dois códigos: conflito → fora da amostra.
-        pool.append(loader.NCMItem(item_id=999, name="ITEM TAIL UM 0 BBB", ncm_code="22042100"))
-        samples = loader.get_frozen_eval_set(pool, sample_limit=10, head_share=0.6)
-        conflicting = [sample for sample in samples if sample["name"] == "ITEM TAIL UM 0 BBB"]
-        assert conflicting == []
 
-    def test_raises_when_tail_pool_is_smaller_than_requested_share(self) -> None:
+def _load(
+    path: Path,
+    *,
+    seed: int = 42,
+    n_validation: int = 10,
+    n_test: int = 30,
+    head_share: float = 0.7,
+) -> loader.BenchmarkSets:
+    return loader.load_catalog_benchmark_set(
+        path,
+        FOOD_CATEGORIES,
+        n_validation=n_validation,
+        n_test=n_test,
+        head_share=head_share,
+        tail_max_chars=20,
+        seed=seed,
+    )
+
+
+class TestLoadCatalogBenchmarkSet:
+    def test_stratified_sizes_and_closed_set_filter(self, tmp_path: Path) -> None:
+        path = _write_pool_xlsx(tmp_path, _big_pool())
+        result = _load(path)
+        assert len(result.validation) == 10
+        assert len(result.test) == 30
+        assert sum(not s.is_long_tail for s in result.validation) == 7
+        assert sum(s.is_long_tail for s in result.validation) == 3
+        assert sum(not s.is_long_tail for s in result.test) == 21
+        assert sum(s.is_long_tail for s in result.test) == 9
+        for sample in [*result.validation, *result.test]:
+            assert sample.canonical_category in FOOD_CATEGORIES
+            expected_tail = len(sample.raw_text.strip()) <= 20
+            assert sample.is_long_tail is expected_tail
+
+    def test_validation_and_test_share_no_description(self, tmp_path: Path) -> None:
+        result = _load(_write_pool_xlsx(tmp_path, _big_pool()))
+        validation = {s.raw_text.casefold() for s in result.validation}
+        test = {s.raw_text.casefold() for s in result.test}
+        assert validation.isdisjoint(test)
+        all_samples = [*result.validation, *result.test]
+        texts = [s.raw_text.casefold() for s in all_samples]
+        assert len(set(texts)) == len(texts)
+        assert sorted(s.sample_id for s in all_samples) == list(range(40))
+
+    def test_same_seed_reproduces_and_other_seed_reorders(self, tmp_path: Path) -> None:
+        path = _write_pool_xlsx(tmp_path, _big_pool())
+        first = _load(path)
+        assert _load(path) == first
+        other = _load(path, seed=43)
+        assert [s.raw_text for s in other.validation] != [s.raw_text for s in first.validation]
+        assert [s.raw_text for s in other.test] != [s.raw_text for s in first.test]
+
+    def test_exactly_twenty_chars_is_tail_and_twenty_one_is_head(self, tmp_path: Path) -> None:
+        rows = [
+            ("A" * 20, "MERCEARIA"),
+            ("B" * 20, "MERCEARIA"),
+            ("C" * 21, "MERCEARIA"),
+            ("D" * 22, "MERCEARIA"),
+            ("E" * 23, "MERCEARIA"),
+        ]
+        result = _load(_write_pool_xlsx(tmp_path, rows), n_validation=2, n_test=2, head_share=0.5)
+        samples = [*result.validation, *result.test]
+        assert all(s.is_long_tail for s in samples if len(s.raw_text) == 20)
+        assert all(not s.is_long_tail for s in samples if len(s.raw_text) >= 21)
+        assert len(samples) == 4
+
+    def test_dedups_descriptions_case_insensitively_keeping_first(self, tmp_path: Path) -> None:
+        rows = [
+            ("PROD X", "MERCEARIA"),
+            ("prod x", "FRIOS E LATICINIOS"),
+            ("PROD Y", "FRIOS E LATICINIOS"),
+            ("PRODUTOS Z HEAD LONGO PARA CABECA", "MERCEARIA"),
+            ("PRODUTOS W HEAD LONGO PARA CABECA", "MERCEARIA"),
+        ]
+        result = _load(_write_pool_xlsx(tmp_path, rows), n_validation=2, n_test=2)
+        samples = [*result.validation, *result.test]
+        assert sorted(s.raw_text for s in samples) == [
+            "PROD X",
+            "PROD Y",
+            "PRODUTOS W HEAD LONGO PARA CABECA",
+            "PRODUTOS Z HEAD LONGO PARA CABECA",
+        ]
+        prod_x = next(s for s in samples if s.raw_text == "PROD X")
+        assert prod_x.canonical_category == "MERCEARIA"
+
+    def test_raises_when_tail_pool_is_smaller_than_requested(self, tmp_path: Path) -> None:
+        path = _write_pool_xlsx(tmp_path, _big_pool())
         with pytest.raises(ValueError, match="tail pool"):
-            loader.get_frozen_eval_set(self._pool(), sample_limit=10, head_share=0.1)
+            _load(path, n_validation=20, head_share=0.1)
 
-    def test_rejects_invalid_parameters(self) -> None:
-        pool = self._pool()
-        with pytest.raises(ValueError, match="sample_limit"):
-            loader.get_frozen_eval_set(pool, sample_limit=0)
+    def test_rejects_invalid_parameters(self, tmp_path: Path) -> None:
+        path = _write_pool_xlsx(tmp_path, _big_pool())
         with pytest.raises(ValueError, match="head_share"):
-            loader.get_frozen_eval_set(pool, sample_limit=10, head_share=1.0)
+            _load(path, head_share=1.0)
+        with pytest.raises(ValueError, match="positive"):
+            _load(path, n_test=0)
 
 
-class TestTruncateCode:
-    def test_truncates_to_each_supported_granularity(self) -> None:
-        assert loader.truncate_code("22071090", 2) == "22"
-        assert loader.truncate_code("22071090", 4) == "2207"
-        assert loader.truncate_code("22071090", 6) == "220710"
-        assert loader.truncate_code("22071090", 8) == "22071090"
-
-    def test_rejects_unsupported_granularity(self) -> None:
-        with pytest.raises(ValueError, match="digits"):
-            loader.truncate_code("22071090", 5)
+def test_fixture_has_forty_real_rows_with_mixed_strata() -> None:
+    rows = fixture_rows()
+    assert len(rows) == 40
+    assert all(description and categoria for description, categoria in rows)
+    assert any(len(description.strip()) <= 20 for description, _ in rows)
+    assert any(len(description.strip()) > 20 for description, _ in rows)
+    assert len({categoria for _, categoria in rows}) > 5
